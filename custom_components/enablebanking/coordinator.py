@@ -94,6 +94,12 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         self.last_error: str = ""
         self._warned_expiry = False
         self._cached: dict[str, AccountBalance] = {}
+        # Pre-0.6.5 cache entries were keyed by the session uid and carry no
+        # stable_id, so they can't seed a (stable_id-keyed) sensor directly.
+        # We hold them here and adopt them on the first poll — which knows the
+        # uid↔stable_id mapping — so last-known balances survive the upgrade
+        # instead of the sensors going unavailable until a fresh poll succeeds.
+        self._legacy_by_uid: dict[str, AccountBalance] = {}
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.cache"
         )
@@ -187,11 +193,13 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             if not isinstance(raw, dict):
                 continue
             ab = _balance_from_stored(raw)
-            # Legacy caches were keyed by the session uid and have no
-            # ``stable_id``; _balance_from_stored drops those so they repopulate
-            # (keyed by stable_id) on the first poll after upgrade.
-            if ab is not None:
+            if ab is None:
+                continue
+            if ab.stable_id:
                 self._cached[ab.stable_id] = ab
+            elif ab.account_id:
+                # Pre-0.6.5 entry: keep by uid and adopt on the first poll.
+                self._legacy_by_uid[ab.account_id] = ab
 
         self.last_refresh = _parse_iso(stored.get("last_polled_at"))
 
@@ -281,6 +289,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             fresh, rate_limited_ids = await self.client.async_get_all_balances(
                 fallback=self._cached,
                 skip_ids=skip_ids,
+                legacy_by_uid=self._legacy_by_uid or None,
             )
         except EnableBankingAuthenticationError as err:
             self.last_error = "auth"
@@ -318,6 +327,12 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 ab.last_polled_at = now
                 ab.rate_limited_until = None
             self._cached[stable_id] = ab
+
+        # Drop legacy (pre-0.6.5) entries we've now adopted into the stable
+        # cache so they aren't re-considered on later polls.
+        if self._legacy_by_uid:
+            for adopted in {ab.account_id for ab in fresh.values() if ab.account_id}:
+                self._legacy_by_uid.pop(adopted, None)
 
         await self._save_cache()
 
@@ -370,11 +385,11 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
 
 def _balance_from_stored(data: dict[str, Any]) -> AccountBalance | None:
     try:
-        # ``stable_id`` is required: legacy cache entries predate it and are
-        # intentionally dropped (they would otherwise be mis-keyed by uid).
-        stable_id = data["stable_id"]
-        if not isinstance(stable_id, str) or not stable_id:
-            return None
+        # ``stable_id`` may be absent in pre-0.6.5 cache files; such entries
+        # get an empty stable_id and are held as legacy (adopted on first poll).
+        stable_id = data.get("stable_id", "")
+        if not isinstance(stable_id, str):
+            stable_id = ""
         return AccountBalance(
             account_id=str(data["account_id"]),
             stable_id=stable_id,

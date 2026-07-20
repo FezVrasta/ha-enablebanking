@@ -296,6 +296,7 @@ class EnableBankingClient:
         fallback: dict[str, AccountBalance] | None = None,
         skip_ids: set[str] | None = None,
         fetch_details: bool = True,
+        legacy_by_uid: dict[str, AccountBalance] | None = None,
     ) -> tuple[dict[str, AccountBalance], set[str]]:
         """Return (accounts, rate_limited_ids) for the current session.
 
@@ -363,6 +364,9 @@ class EnableBankingClient:
             #   3. a one-time GET /accounts/{uid}/details call (N26, SNS Bank …
             #      omit the IBAN from the session, and balances carry none).
             prev = fallback.get(stable_id) if fallback else None
+            if prev is None and legacy_by_uid:
+                # Pre-0.6.5 last-known balance, keyed by the (current) uid.
+                prev = legacy_by_uid.get(uid)
             iban = _account_iban(meta) or (prev.iban if prev else "")
             name = _account_display_name(meta) or (prev.name if prev else "")
             product = meta.get("product") if isinstance(meta.get("product"), str) else None
@@ -409,14 +413,18 @@ class EnableBankingClient:
                 raise
             except EnableBankingRateLimitError as err:
                 rate_limited.add(stable_id)
-                if fallback and stable_id in fallback:
+                if prev is not None:
                     _LOGGER.warning(
                         "Rate limited on %s — keeping previous balance "
                         "(PSD2 caps AIS polling at 4/day). Error: %s",
                         name,
                         err,
                     )
-                    out[stable_id] = fallback[stable_id]
+                    # Adopt the previous value under the resolved stable_id
+                    # (prev may be a legacy uid-keyed entry from before 0.6.5).
+                    prev.stable_id = stable_id
+                    prev.account_id = uid
+                    out[stable_id] = prev
                 else:
                     _LOGGER.warning(
                         "Rate limited on %s and no previous balance to fall "
