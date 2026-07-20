@@ -226,8 +226,22 @@ class EnableBankingClient:
     # ------------------------------------------------------------------ #
 
     async def async_validate(self) -> bool:
-        """Check that the JWT and session id are both usable."""
-        await self.async_get_session()
+        """Check that the JWT works AND the session is genuinely usable.
+
+        Enable Banking returns HTTP 200 for ``GET /sessions/{id}`` even when the
+        underlying consent has expired or been revoked — the session object is
+        still readable, it just carries a non-``AUTHORIZED`` ``status`` and every
+        ``/accounts/{uid}/balances`` call under it returns 401. Only treating a
+        200 as "alive" makes the reauth fast-path keep a dead session forever, so
+        require ``status == AUTHORIZED`` here.
+        """
+        session = await self.async_get_session()
+        status = session.get("status")
+        # If an ASPSP omits ``status`` we stay backward-compatible and assume OK.
+        if status is not None and status != "AUTHORIZED":
+            raise EnableBankingSessionError(
+                f"Session status is {status!r}, not AUTHORIZED"
+            )
         return True
 
     async def async_get_session(self) -> dict[str, Any]:
