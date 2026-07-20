@@ -16,9 +16,17 @@ class AccountBalance:
     fields being persisted alongside the balance itself so that, after an
     HA restart, the sensor can show exactly how old the displayed value
     is and whether a back-off is still in force.
+
+    ``stable_id`` is Enable Banking's ``identification_hash`` — an
+    account-intrinsic value (derived from IBAN+currency, or resource_id for
+    IBAN-less accounts) that stays constant across sessions. It is the key we
+    use for entity identity and the cache. ``account_id`` is the session-scoped
+    ``uid`` which Enable Banking regenerates on every reauth; it is only used
+    to call ``GET /accounts/{uid}/balances`` and to migrate old entity ids.
     """
 
     account_id: str
+    stable_id: str
     iban: str
     name: str
     product: str | None

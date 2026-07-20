@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -15,14 +16,17 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import CURRENCY_EURO
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.util.dt import utcnow
 
-from .const import CONF_ASPSP_NAME, DEFAULT_SCAN_INTERVAL
+from .const import CONF_ASPSP_NAME, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .coordinator import EnableBankingConfigEntry, EnableBankingCoordinator
-from .entity import EnableBankingEntity
+from .entity import EnableBankingEntity, account_unique_id
 from .models import AccountBalance
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -70,29 +74,72 @@ async def async_setup_entry(
 
     @callback
     def _async_add_for_new_accounts() -> None:
+        # Re-point any pre-0.6.5 uid-based entities to the stable-id scheme
+        # BEFORE adding, so the added entity reuses the existing registry entry
+        # (and its entity_id / history) instead of orphaning it.
+        _migrate_unique_ids(hass, entry, coordinator)
+
         new_entities: list[EnableBankingBalanceSensor] = []
-        seen_uids: set[str] = set()
+        seen_ids: set[str] = set()
         if coordinator.data is not None:
-            seen_uids.update(coordinator.data.accounts.keys())
+            seen_ids.update(coordinator.data.accounts.keys())
         # Also surface sensors for accounts that exist only in the cache
         # (e.g. first boot after an HA restart, before the first post-boot
-        # poll has run).
-        seen_uids.update(
-            uid for uid in coordinator._cached
+        # poll has run). Keys are stable_ids.
+        seen_ids.update(
+            stable_id for stable_id in coordinator._cached
         )  # noqa: SLF001 — intentional direct access
 
-        for account_id in seen_uids:
-            if account_id in known:
+        for stable_id in seen_ids:
+            if stable_id in known:
                 continue
-            known.add(account_id)
+            known.add(stable_id)
             new_entities.append(
-                EnableBankingBalanceSensor(coordinator, BALANCE_SENSOR, account_id)
+                EnableBankingBalanceSensor(coordinator, BALANCE_SENSOR, stable_id)
             )
         if new_entities:
             async_add_entities(new_entities)
 
     _async_add_for_new_accounts()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_for_new_accounts))
+
+
+@callback
+def _migrate_unique_ids(
+    hass: HomeAssistant,
+    entry: EnableBankingConfigEntry,
+    coordinator: EnableBankingCoordinator,
+) -> None:
+    """Migrate old ``{entry}_{uid}_balance`` unique_ids to the stable-id scheme.
+
+    Enable Banking rotates the account ``uid`` on every reauth, so uid-based
+    unique_ids used to spawn a fresh entity each time. We now key on
+    ``stable_id`` (identification_hash). This re-points the *currently active*
+    entity for each account in place — preserving its entity_id and history —
+    using the live uid↔stable_id mapping from the latest poll. Historical
+    orphans from earlier reauths can't be mapped and are left for the user to
+    delete. Idempotent: after migration the old unique_id no longer exists.
+    """
+    data = coordinator.data
+    if data is None:
+        return
+    registry = er.async_get(hass)
+    for ab in data.accounts.values():
+        uid = ab.account_id
+        if not uid:
+            continue
+        old_unique = f"{entry.entry_id}_{uid}_{BALANCE_SENSOR.key}"
+        new_unique = account_unique_id(entry.entry_id, ab.stable_id, BALANCE_SENSOR.key)
+        if old_unique == new_unique:
+            continue
+        old_eid = registry.async_get_entity_id("sensor", DOMAIN, old_unique)
+        new_eid = registry.async_get_entity_id("sensor", DOMAIN, new_unique)
+        if old_eid and not new_eid:
+            registry.async_update_entity(old_eid, new_unique_id=new_unique)
+            _LOGGER.info(
+                "Enable Banking: migrated %s to a session-stable unique_id",
+                old_eid,
+            )
 
 
 class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
@@ -120,11 +167,11 @@ class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
 
     @property
     def _current_account(self) -> AccountBalance | None:
-        """Best-effort account lookup: fresh data, else cache."""
+        """Best-effort account lookup by stable_id: fresh data, else cache."""
         data = self.coordinator.data
-        if data is not None and self._account_id in data.accounts:
-            return data.accounts[self._account_id]
-        return self.coordinator.cached_account(self._account_id)
+        if data is not None and self._stable_id in data.accounts:
+            return data.accounts[self._stable_id]
+        return self.coordinator.cached_account(self._stable_id)
 
     @property
     def available(self) -> bool:

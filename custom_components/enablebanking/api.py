@@ -20,6 +20,7 @@ See https://enablebanking.com/docs/api/reference/ for the full surface.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -130,6 +131,14 @@ class EnableBankingClient:
                     text[:3000],
                 )
                 if response.status in (401, 403):
+                    # An expired/revoked consent also surfaces as 401, but with
+                    # an EXPIRED_SESSION body — that's a session problem, not a
+                    # bad JWT. Classify it as such for accurate logs (both still
+                    # trigger reauth in the coordinator).
+                    if response.status == 401 and "EXPIRED_SESSION" in text:
+                        raise EnableBankingSessionError(
+                            f"Session expired (HTTP 401): {text[:200]}"
+                        )
                     _LOGGER.error(
                         "Enable Banking JWT rejected (HTTP %s). "
                         "JWT info: %s. Response: %s",
@@ -268,15 +277,19 @@ class EnableBankingClient:
     async def async_get_all_balances(
         self,
         fallback: dict[str, AccountBalance] | None = None,
-        skip_uids: set[str] | None = None,
+        skip_ids: set[str] | None = None,
     ) -> tuple[dict[str, AccountBalance], set[str]]:
-        """Return (accounts, rate_limited_uids) for the current session.
+        """Return (accounts, rate_limited_ids) for the current session.
 
-        ``fallback`` is the coordinator's previous per-uid data. If an
-        account's balance fetch hits a 429 (or is in ``skip_uids`` for
+        Accounts are keyed by ``stable_id`` (Enable Banking's
+        ``identification_hash``), not the session ``uid`` — the uid changes on
+        every reauth, the stable_id does not.
+
+        ``fallback`` is the coordinator's previous per-stable_id data. If an
+        account's balance fetch hits a 429 (or is in ``skip_ids`` for
         back-off), we return its previous ``AccountBalance`` rather than
-        dropping the sensor. The returned ``rate_limited_uids`` set tells
-        the coordinator which UIDs need a back-off flag set on their
+        dropping the sensor. The returned ``rate_limited_ids`` set tells
+        the coordinator which accounts need a back-off flag set on their
         cached entry.
 
         Session payload shape (observed for N26 and similar ASPSPs):
@@ -308,24 +321,28 @@ class EnableBankingClient:
         rate_limited: set[str] = set()
         for uid in uids:
             meta = metadata.get(uid, {})
+            stable_id = _account_stable_id(meta, uid)
             _LOGGER.debug(
-                "metadata for %s: keys=%s",
+                "metadata for %s (stable %s): keys=%s",
                 uid[:8],
+                _short_token(stable_id),
                 sorted(meta.keys()) if meta else "<missing>",
             )
 
             # Respect the coordinator's back-off: don't spend a poll on
             # an account we already know is rate-limited this cycle.
-            if skip_uids and uid in skip_uids:
-                if fallback and uid in fallback:
+            if skip_ids and stable_id in skip_ids:
+                if fallback and stable_id in fallback:
                     _LOGGER.debug(
                         "Skipping %s — rate-limit back-off active", uid[:8]
                     )
-                    out[uid] = fallback[uid]
+                    out[stable_id] = fallback[stable_id]
                 continue
 
             iban = _account_iban(meta)
-            name = _account_display_name(meta) or iban or uid[:8]
+            # Name must not depend on the session uid (it churns on reauth);
+            # fall back to a stable short token derived from stable_id.
+            name = _account_display_name(meta) or iban or _short_token(stable_id)
             product = meta.get("product") if isinstance(meta.get("product"), str) else None
 
             try:
@@ -337,15 +354,15 @@ class EnableBankingClient:
             except EnableBankingConnectionError:
                 raise
             except EnableBankingRateLimitError as err:
-                rate_limited.add(uid)
-                if fallback and uid in fallback:
+                rate_limited.add(stable_id)
+                if fallback and stable_id in fallback:
                     _LOGGER.warning(
                         "Rate limited on %s — keeping previous balance "
                         "(PSD2 caps AIS polling at 4/day). Error: %s",
                         name,
                         err,
                     )
-                    out[uid] = fallback[uid]
+                    out[stable_id] = fallback[stable_id]
                 else:
                     _LOGGER.warning(
                         "Rate limited on %s and no previous balance to fall "
@@ -385,8 +402,9 @@ class EnableBankingClient:
                 )
                 continue
 
-            out[uid] = AccountBalance(
+            out[stable_id] = AccountBalance(
                 account_id=uid,
+                stable_id=stable_id,
                 iban=iban,
                 name=str(name),
                 product=product,
@@ -448,6 +466,26 @@ def _collect_accounts(
     seen: set[str] = set()
     uids = [u for u in uids if not (u in seen or seen.add(u))]
     return uids, metadata
+
+
+def _account_stable_id(meta: dict[str, Any], uid: str) -> str:
+    """Return a session-independent identifier for an account.
+
+    Enable Banking regenerates the account ``uid`` on every session, so it is
+    useless as a persistent key. ``identification_hash`` is account-intrinsic
+    (a hash over IBAN+currency, or bank+country+resource_id for IBAN-less
+    accounts) and stays constant across sessions — that's what we key on.
+    Falls back to ``uid`` only in the unlikely event the hash is absent.
+    """
+    hash_id = meta.get("identification_hash")
+    if isinstance(hash_id, str) and hash_id:
+        return hash_id
+    return uid
+
+
+def _short_token(value: str) -> str:
+    """A short, stable, filesystem/name-safe token derived from ``value``."""
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
 
 
 def _account_iban(meta: dict[str, Any]) -> str:

@@ -183,12 +183,15 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         Call this once in ``async_setup_entry`` before forwarding platforms.
         """
         stored = await self._store.async_load() or {}
-        for uid, raw in (stored.get("accounts") or {}).items():
+        for key, raw in (stored.get("accounts") or {}).items():
             if not isinstance(raw, dict):
                 continue
             ab = _balance_from_stored(raw)
+            # Legacy caches were keyed by the session uid and have no
+            # ``stable_id``; _balance_from_stored drops those so they repopulate
+            # (keyed by stable_id) on the first poll after upgrade.
             if ab is not None:
-                self._cached[uid] = ab
+                self._cached[ab.stable_id] = ab
 
         self.last_refresh = _parse_iso(stored.get("last_polled_at"))
 
@@ -212,13 +215,14 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 if self.last_refresh
                 else None,
                 "accounts": {
-                    uid: _balance_to_stored(ab) for uid, ab in self._cached.items()
+                    stable_id: _balance_to_stored(ab)
+                    for stable_id, ab in self._cached.items()
                 },
             }
         )
 
-    def cached_account(self, uid: str) -> AccountBalance | None:
-        return self._cached.get(uid)
+    def cached_account(self, stable_id: str) -> AccountBalance | None:
+        return self._cached.get(stable_id)
 
     # ------------------------------------------------------------------ #
     # Refresh                                                              #
@@ -261,22 +265,22 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         """Fetch balances. NEVER raises — always returns cached data on error."""
         await self._async_maybe_renew_jwt()
         now = dt_util.utcnow()
-        skip_uids = {
-            uid
-            for uid, ab in self._cached.items()
+        skip_ids = {
+            stable_id
+            for stable_id, ab in self._cached.items()
             if ab.rate_limited_until is not None and ab.rate_limited_until > now
         }
-        if skip_uids:
+        if skip_ids:
             _LOGGER.debug(
                 "Skipping %d rate-limited account(s) this cycle: %s",
-                len(skip_uids),
-                sorted(u[:8] for u in skip_uids),
+                len(skip_ids),
+                sorted(s[:8] for s in skip_ids),
             )
 
         try:
-            fresh, rate_limited_uids = await self.client.async_get_all_balances(
+            fresh, rate_limited_ids = await self.client.async_get_all_balances(
                 fallback=self._cached,
-                skip_uids=skip_uids,
+                skip_ids=skip_ids,
             )
         except EnableBankingAuthenticationError as err:
             self.last_error = "auth"
@@ -307,13 +311,13 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         self.last_refresh = now
         back_off_until = now + _BACK_OFF
 
-        for uid, ab in fresh.items():
-            if uid in rate_limited_uids:
+        for stable_id, ab in fresh.items():
+            if stable_id in rate_limited_ids:
                 ab.rate_limited_until = back_off_until
             else:
                 ab.last_polled_at = now
                 ab.rate_limited_until = None
-            self._cached[uid] = ab
+            self._cached[stable_id] = ab
 
         await self._save_cache()
 
@@ -366,8 +370,14 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
 
 def _balance_from_stored(data: dict[str, Any]) -> AccountBalance | None:
     try:
+        # ``stable_id`` is required: legacy cache entries predate it and are
+        # intentionally dropped (they would otherwise be mis-keyed by uid).
+        stable_id = data["stable_id"]
+        if not isinstance(stable_id, str) or not stable_id:
+            return None
         return AccountBalance(
             account_id=str(data["account_id"]),
+            stable_id=stable_id,
             iban=str(data.get("iban", "")),
             name=str(data.get("name", "")),
             product=data.get("product") if isinstance(data.get("product"), str) else None,
@@ -390,6 +400,7 @@ def _balance_from_stored(data: dict[str, Any]) -> AccountBalance | None:
 def _balance_to_stored(ab: AccountBalance) -> dict[str, Any]:
     return {
         "account_id": ab.account_id,
+        "stable_id": ab.stable_id,
         "iban": ab.iban,
         "name": ab.name,
         "product": ab.product,
