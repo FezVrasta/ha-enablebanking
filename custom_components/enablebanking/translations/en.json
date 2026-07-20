@@ -55,7 +55,8 @@
       "unknown": "Unexpected error — check the Home Assistant log for details."
     },
     "abort": {
-      "already_configured": "This bank session is already configured"
+      "already_configured": "This bank session is already configured",
+      "reauth_successful": "Re-authentication successful — a new bank session is active. Your balances refresh on the next scheduled poll."
     }
   },
   "entity": {

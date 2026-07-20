@@ -55,7 +55,8 @@
       "unknown": "Onbekende fout — bekijk het Home Assistant-logboek voor meer informatie."
     },
     "abort": {
-      "already_configured": "Deze banksessie is al geconfigureerd"
+      "already_configured": "Deze banksessie is al geconfigureerd",
+      "reauth_successful": "Opnieuw authenticeren gelukt — er is een nieuwe banksessie actief. Je saldi worden bij de volgende ophaalronde bijgewerkt."
     }
   },
   "entity": {
