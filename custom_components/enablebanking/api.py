@@ -274,10 +274,28 @@ class EnableBankingClient:
             return []
         return balances
 
+    async def async_get_account_details(self, account_id: str) -> dict[str, Any]:
+        """Return the account-details object for a single account.
+
+        The balances endpoint carries no account identification, and several
+        ASPSPs (e.g. N26, SNS Bank) omit the IBAN from the session payload too.
+        This endpoint returns it (``account_id.iban``) plus ``name``/``product``/
+        ``currency``. It has its own per-account rate-limit budget separate from
+        ``/balances``, and the IBAN is immutable, so callers fetch it once per
+        account and cache the result.
+        """
+        data = await self._request("GET", f"/accounts/{account_id}/details")
+        if not isinstance(data, dict):
+            raise EnableBankingAPIError(
+                f"Unexpected account-details payload type: {type(data).__name__}"
+            )
+        return data
+
     async def async_get_all_balances(
         self,
         fallback: dict[str, AccountBalance] | None = None,
         skip_ids: set[str] | None = None,
+        fetch_details: bool = True,
     ) -> tuple[dict[str, AccountBalance], set[str]]:
         """Return (accounts, rate_limited_ids) for the current session.
 
@@ -339,11 +357,47 @@ class EnableBankingClient:
                     out[stable_id] = fallback[stable_id]
                 continue
 
-            iban = _account_iban(meta)
-            # Name must not depend on the session uid (it churns on reauth);
-            # fall back to a stable short token derived from stable_id.
-            name = _account_display_name(meta) or iban or _short_token(stable_id)
+            # Resolve the account's IBAN / display fields. Order of preference:
+            #   1. the session payload (some ASPSPs include it there),
+            #   2. the previous cache entry (already resolved on an earlier poll),
+            #   3. a one-time GET /accounts/{uid}/details call (N26, SNS Bank …
+            #      omit the IBAN from the session, and balances carry none).
+            prev = fallback.get(stable_id) if fallback else None
+            iban = _account_iban(meta) or (prev.iban if prev else "")
+            name = _account_display_name(meta) or (prev.name if prev else "")
             product = meta.get("product") if isinstance(meta.get("product"), str) else None
+            if not product and prev and prev.product:
+                product = prev.product
+
+            if not iban and fetch_details:
+                # Separate per-account rate-limit budget from /balances, and the
+                # IBAN never changes, so this runs at most once per account.
+                # Let session/auth/connection errors propagate (they mean the
+                # whole poll should fail/trigger reauth); only shrug off a
+                # details-specific rate limit or API hiccup.
+                try:
+                    details = await self.async_get_account_details(uid)
+                except EnableBankingRateLimitError:
+                    _LOGGER.debug(
+                        "Account details rate-limited for %s; will retry next poll",
+                        uid[:8],
+                    )
+                    details = None
+                except EnableBankingAPIError as err:
+                    _LOGGER.debug(
+                        "Could not fetch account details for %s: %s", uid[:8], err
+                    )
+                    details = None
+                if details:
+                    iban = _account_iban(details) or iban
+                    name = name or _account_display_name(details)
+                    detail_product = details.get("product")
+                    if not product and isinstance(detail_product, str):
+                        product = detail_product
+
+            # Name must never depend on the session uid (it churns on reauth);
+            # fall back to a stable short token derived from stable_id.
+            name = name or iban or _short_token(stable_id)
 
             try:
                 balances = await self.async_get_account_balances(uid)
