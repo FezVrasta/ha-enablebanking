@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
+from homeassistant.util import slugify
 from homeassistant.util.dt import utcnow
 
 from .const import CONF_ASPSP_NAME, DEFAULT_SCAN_INTERVAL, DOMAIN
@@ -100,6 +101,9 @@ async def async_setup_entry(
         if new_entities:
             async_add_entities(new_entities)
 
+        # Give IBAN accounts a clean `sensor.<iban>` entity_id.
+        _apply_iban_entity_ids(hass, entry, coordinator)
+
     _async_add_for_new_accounts()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_for_new_accounts))
 
@@ -142,6 +146,48 @@ def _migrate_unique_ids(
             )
 
 
+@callback
+def _apply_iban_entity_ids(
+    hass: HomeAssistant,
+    entry: EnableBankingConfigEntry,
+    coordinator: EnableBankingCoordinator,
+) -> None:
+    """Rename each IBAN account's entity to ``sensor.<iban>``.
+
+    New IBAN sensors already register as ``sensor.<iban>`` (they set
+    ``has_entity_name = False`` with the IBAN as their name). This fixes up the
+    entity_id of sensors that were created by an earlier version under the
+    ``sensor.<bank>_balance_<…>`` scheme, preserving their history.
+
+    Guards: only auto-generated ids (still containing ``_balance``) are touched,
+    so a user's own rename is never overwritten; and only when the target id is
+    free. Accounts without an IBAN are left unchanged.
+    """
+    data = coordinator.data
+    if data is None:
+        return
+    registry = er.async_get(hass)
+    for ab in data.accounts.values():
+        if not ab.iban:
+            continue
+        unique = account_unique_id(entry.entry_id, ab.stable_id, BALANCE_SENSOR.key)
+        eid = registry.async_get_entity_id("sensor", DOMAIN, unique)
+        if not eid:
+            continue
+        target = f"sensor.{slugify(ab.iban)}"
+        if eid == target or "_balance" not in eid:
+            continue
+        if registry.async_get(target) is not None:
+            _LOGGER.debug(
+                "Enable Banking: cannot rename %s to %s (already exists)",
+                eid,
+                target,
+            )
+            continue
+        registry.async_update_entity(eid, new_entity_id=target)
+        _LOGGER.info("Enable Banking: renamed %s to %s", eid, target)
+
+
 class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
     """Balance sensor for one Enable Banking account.
 
@@ -154,14 +200,34 @@ class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
     entity_description: EnableBankingSensorDescription
     coordinator: EnableBankingCoordinator
 
+    def __init__(
+        self,
+        coordinator: EnableBankingCoordinator,
+        description: EnableBankingSensorDescription,
+        stable_id: str,
+    ) -> None:
+        super().__init__(coordinator, description, stable_id)
+        # An account with an IBAN is named solely by its IBAN: friendly name
+        # = the IBAN and entity_id = sensor.<iban> (no device prefix, no
+        # "Balance" label). Accounts without an IBAN keep the device-qualified
+        # "Balance …" name unchanged. Decided at creation from the IBAN the
+        # first poll resolved; the entity_id of pre-existing sensors is fixed
+        # up separately by _apply_iban_entity_ids().
+        account = None
+        if coordinator.data is not None:
+            account = coordinator.data.accounts.get(stable_id)
+        if account is None:
+            account = coordinator.cached_account(stable_id)
+        if account is not None and account.iban:
+            self._attr_has_entity_name = False
+
     @property
     def name(self) -> str | None:
         account = self._current_account
-        if account is None:
-            return "Balance"
-        if account.iban:
-            return f"Balance {account.iban}"
-        if account.name:
+        if account is not None and account.iban:
+            return account.iban
+        # No IBAN — unchanged behaviour (device-qualified "Balance …").
+        if account is not None and account.name:
             return f"Balance {account.name}"
         return "Balance"
 
