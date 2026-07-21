@@ -334,6 +334,20 @@ class EnableBankingClient:
             len(metadata),
         )
         if not uids:
+            # Visible at INFO/WARNING (not just DEBUG) because this is the
+            # usual reason an entry loads but never gets sensors: the consent
+            # was granted but the session exposes no accounts.
+            aspsp = session.get("aspsp") if isinstance(session.get("aspsp"), dict) else {}
+            _LOGGER.warning(
+                "Enable Banking: session for %s returned no accounts "
+                "(status=%s, session keys=%s). If the bank consent was just "
+                "granted, check in the Enable Banking dashboard that the "
+                "account is linked/authorised and that the app's Account "
+                "Information service is not 'Restricted'.",
+                aspsp.get("name", "?"),
+                session.get("status"),
+                sorted(session.keys()),
+            )
             return {}, set()
 
         out: dict[str, AccountBalance] = {}

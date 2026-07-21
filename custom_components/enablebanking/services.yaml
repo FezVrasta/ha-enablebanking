@@ -1,0 +1,7 @@
+refresh:
+  name: Refresh balances
+  description: >-
+    Force an immediate balance poll for all Enable Banking accounts, bypassing
+    the fixed 10:00/14:00/18:00/22:00 schedule. Useful for debugging a freshly
+    added bank. Still counts against the bank's PSD2 rate limit (typically 4
+    polls per day per account).

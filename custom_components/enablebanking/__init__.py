@@ -7,17 +7,45 @@ import random
 from datetime import datetime
 
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later
 
 from .api import EnableBankingClient
-from .const import CONF_JWT, CONF_SESSION_ID, STARTUP_JITTER_SECONDS
+from .const import CONF_JWT, CONF_SESSION_ID, DOMAIN, STARTUP_JITTER_SECONDS
 from .coordinator import EnableBankingConfigEntry, EnableBankingCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+SERVICE_REFRESH = "refresh"
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    """Register the domain-wide ``enablebanking.refresh`` service once.
+
+    Forces an immediate balance poll for every configured entry — handy for
+    debugging (you don't need an existing sensor to trigger it) and still
+    subject to the bank's PSD2 rate limit.
+    """
+    if hass.services.has_service(DOMAIN, SERVICE_REFRESH):
+        return
+
+    async def _handle_refresh(_call: ServiceCall) -> None:
+        entries: list[EnableBankingConfigEntry] = hass.config_entries.async_entries(
+            DOMAIN
+        )
+        for entry in entries:
+            coordinator = getattr(entry, "runtime_data", None)
+            if coordinator is None:
+                continue
+            _LOGGER.debug(
+                "enablebanking.refresh: forcing poll for entry %s", entry.entry_id
+            )
+            await coordinator.async_refresh()
+
+    hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
 
 async def async_setup_entry(
@@ -47,6 +75,8 @@ async def async_setup_entry(
     coordinator = EnableBankingCoordinator(hass, entry, client)
     await coordinator.async_load_cache()
     entry.runtime_data = coordinator
+
+    _register_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
