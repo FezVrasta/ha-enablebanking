@@ -36,6 +36,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          # No uv.lock is committed, so nothing can match the cache key. On the
+          # default (auto) setup-uv turns the cache on and then warns on every run
+          # that it can never be invalidated.
+          enable-cache: false
       # uv resolves and downloads the interpreter itself, so requires-python in
       # pyproject.toml stays the single source of truth for the Python version.
       # Note that floor is 3.14.2: every homeassistant release this integration
