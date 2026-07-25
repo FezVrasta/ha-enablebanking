@@ -2,8 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Enable Banking — applicatiegegevens",
-        "description": "Plak de inhoud van de **privésleutel** (.pem-bestand) van je Enable Banking-applicatie en voer het **applicatie-ID** in (UUID uit de Enable Banking-console). De integratie vernieuwt de JWT automatisch elke 23 uur — je hoeft hier nooit meer naar om te kijken.",
+        "title": "Enable Banking-applicatiegegevens",
+        "description": "Plak de inhoud van de **privésleutel** (.pem-bestand) van je Enable Banking-applicatie en voer het **applicatie-ID** in (UUID uit de Enable Banking-console). De integratie ondertekent hiermee zelf een JWT en vernieuwt die elke 23 uur, dus je hoeft hier nooit meer naar om te kijken.",
         "data": {
           "private_key": "Privésleutel (PEM-inhoud)",
           "app_id": "Applicatie-ID (UUID)"
@@ -26,14 +26,14 @@
       },
       "auth": {
         "title": "Autoriseer bij je bank",
-        "description": "**[Open deze link om bij je bank te autoriseren]({auth_url})**\n\nNa het inloggen word je doorgestuurd naar enablebanking.com. Kopieer de waarde van `code` uit de URL-balk (die ziet eruit als `?code=abc…`) en plak hem hieronder.",
+        "description": "**[Open deze link om bij je bank te autoriseren]({auth_url})**\n\nNa het inloggen word je doorgestuurd naar enablebanking.com. Kopieer de waarde van `code` uit de URL-balk (die ziet eruit als `?code=abc...`) en plak hem hieronder.",
         "data": {
           "auth_code": "Autorisatiecode"
         }
       },
       "reauth_jwt": {
         "title": "Opnieuw authenticeren met Enable Banking",
-        "description": "Je **{aspsp_name}**-toestemming is verlopen of ingetrokken. Bevestig je privésleutel en applicatie-ID hieronder (al ingevuld als eerder opgeslagen) en autoriseer daarna een nieuwe sessie bij je bank.",
+        "description": "Je **{aspsp_name}**-toestemming is verlopen of ingetrokken. Bevestig je privésleutel en applicatie-ID hieronder (al ingevuld als ze eerder zijn opgeslagen) en autoriseer daarna een nieuwe sessie bij je bank.",
         "data": {
           "private_key": "Privésleutel (PEM-inhoud)",
           "app_id": "Applicatie-ID (UUID)"
@@ -48,15 +48,15 @@
       }
     },
     "error": {
-      "cannot_connect": "Kan geen verbinding maken met Enable Banking — controleer je internetverbinding.",
-      "invalid_auth": "Gegevens afgewezen — controleer of de privésleutel overeenkomt met het applicatie-ID en geldig PEM-formaat heeft.",
-      "invalid_session": "Het sessie-ID is onbekend, ingetrokken of verlopen — doorloop de bankAutorisatie opnieuw.",
-      "invalid_auth_code": "De autorisatiecode werd afgewezen — kopieer de volledige waarde van `code` uit de omleidings-URL.",
-      "unknown": "Onbekende fout — bekijk het Home Assistant-logboek voor meer informatie."
+      "cannot_connect": "Kan geen verbinding maken met Enable Banking, controleer je internetverbinding.",
+      "invalid_auth": "Gegevens afgewezen. Controleer of de privésleutel volledige PEM-inhoud is en bij het ingevoerde applicatie-ID hoort.",
+      "invalid_session": "Het sessie-ID is onbekend, ingetrokken of verlopen. Doorloop de bankautorisatie opnieuw.",
+      "invalid_auth_code": "De autorisatiecode werd afgewezen. Kopieer de volledige waarde van `code` uit de omleidings-URL.",
+      "unknown": "Onbekende fout, bekijk het Home Assistant-logboek voor meer informatie."
     },
     "abort": {
       "already_configured": "Deze banksessie is al geconfigureerd",
-      "reauth_successful": "Opnieuw authenticeren gelukt — er is een nieuwe banksessie actief. Je saldi worden bij de volgende ophaalronde bijgewerkt."
+      "reauth_successful": "Opnieuw authenticeren gelukt, er is een nieuwe banksessie actief. Je saldi worden bij de volgende ophaalronde bijgewerkt."
     }
   },
   "entity": {

@@ -63,9 +63,7 @@ class EnableBankingClient:
         self._session_id = session_id
 
     @classmethod
-    def for_config_flow(
-        cls, session: aiohttp.ClientSession, jwt: str
-    ) -> EnableBankingClient:
+    def for_config_flow(cls, session: aiohttp.ClientSession, jwt: str) -> EnableBankingClient:
         """Create a client for config-flow steps that precede session creation."""
         return cls(session, jwt, "")
 
@@ -85,6 +83,7 @@ class EnableBankingClient:
         try:
             import base64
             import json as _json
+
             header_b64 = self._jwt.split(".")[0]
             # add padding
             header_b64 += "=" * (-len(header_b64) % 4)
@@ -93,6 +92,7 @@ class EnableBankingClient:
             payload_b64 += "=" * (-len(payload_b64) % 4)
             payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
             import time
+
             exp = payload.get("exp", 0)
             remaining = exp - int(time.time())
             return (
@@ -100,7 +100,7 @@ class EnableBankingClient:
                 f"alg={header.get('alg', '?')!r} "
                 f"exp={exp} (expires in {remaining}s)"
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return "<could not decode JWT>"
 
     async def _request(
@@ -124,7 +124,7 @@ class EnableBankingClient:
             ) as response:
                 text = await response.text()
                 _LOGGER.debug(
-                    "Enable Banking response: HTTP %s for %s %s — body: %s",
+                    "Enable Banking response: HTTP %s for %s %s > body: %s",
                     response.status,
                     method,
                     url,
@@ -132,16 +132,13 @@ class EnableBankingClient:
                 )
                 if response.status in (401, 403):
                     # An expired/revoked consent also surfaces as 401, but with
-                    # an EXPIRED_SESSION body — that's a session problem, not a
+                    # an EXPIRED_SESSION body > that's a session problem, not a
                     # bad JWT. Classify it as such for accurate logs (both still
                     # trigger reauth in the coordinator).
                     if response.status == 401 and "EXPIRED_SESSION" in text:
-                        raise EnableBankingSessionError(
-                            f"Session expired (HTTP 401): {text[:200]}"
-                        )
+                        raise EnableBankingSessionError(f"Session expired (HTTP 401): {text[:200]}")
                     _LOGGER.error(
-                        "Enable Banking JWT rejected (HTTP %s). "
-                        "JWT info: %s. Response: %s",
+                        "Enable Banking JWT rejected (HTTP %s). JWT info: %s. Response: %s",
                         response.status,
                         self._jwt_debug_info(),
                         text[:500],
@@ -150,9 +147,7 @@ class EnableBankingClient:
                         f"Enable Banking rejected the JWT (HTTP {response.status}): {text[:200]}"
                     )
                 if response.status == 404:
-                    raise EnableBankingSessionError(
-                        f"Session not found or expired: {text}"
-                    )
+                    raise EnableBankingSessionError(f"Session not found or expired: {text}")
                 if response.status == 429:
                     raise EnableBankingRateLimitError(
                         f"PSD2 rate limit exceeded at ASPSP: {text[:200]}"
@@ -168,9 +163,7 @@ class EnableBankingClient:
                         f"Invalid JSON from Enable Banking: {text[:200]}"
                     ) from err
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise EnableBankingConnectionError(
-                f"Cannot connect to Enable Banking: {err}"
-            ) from err
+            raise EnableBankingConnectionError(f"Cannot connect to Enable Banking: {err}") from err
 
     # ------------------------------------------------------------------ #
     # ASPSP discovery                                                      #
@@ -189,8 +182,10 @@ class EnableBankingClient:
             params["psu_type"] = psu_type
         result = await self._request("GET", "/aspsps", params=params or None)
         if isinstance(result, list):
-            return result
-        return result.get("aspsps", [])
+            aspsps: list[dict[str, Any]] = result
+            return aspsps
+        nested = result.get("aspsps", []) if isinstance(result, dict) else []
+        return nested if isinstance(nested, list) else []
 
     # ------------------------------------------------------------------ #
     # Auth / session creation                                              #
@@ -238,7 +233,7 @@ class EnableBankingClient:
         """Check that the JWT works AND the session is genuinely usable.
 
         Enable Banking returns HTTP 200 for ``GET /sessions/{id}`` even when the
-        underlying consent has expired or been revoked — the session object is
+        underlying consent has expired or been revoked > the session object is
         still readable, it just carries a non-``AUTHORIZED`` ``status`` and every
         ``/accounts/{uid}/balances`` call under it returns 401. Only treating a
         200 as "alive" makes the reauth fast-path keep a dead session forever, so
@@ -248,27 +243,21 @@ class EnableBankingClient:
         status = session.get("status")
         # If an ASPSP omits ``status`` we stay backward-compatible and assume OK.
         if status is not None and status != "AUTHORIZED":
-            raise EnableBankingSessionError(
-                f"Session status is {status!r}, not AUTHORIZED"
-            )
+            raise EnableBankingSessionError(f"Session status is {status!r}, not AUTHORIZED")
         return True
 
     async def async_get_session(self) -> dict[str, Any]:
         """Return the session object (includes the account list)."""
         data = await self._request("GET", f"/sessions/{self._session_id}")
         if not isinstance(data, dict):
-            raise EnableBankingAPIError(
-                f"Unexpected session payload type: {type(data).__name__}"
-            )
+            raise EnableBankingAPIError(f"Unexpected session payload type: {type(data).__name__}")
         return data
 
     async def async_get_account_balances(self, account_id: str) -> list[dict[str, Any]]:
         """Return the list of balance objects for a single account."""
         data = await self._request("GET", f"/accounts/{account_id}/balances")
         if not isinstance(data, dict):
-            raise EnableBankingAPIError(
-                f"Unexpected balances payload type: {type(data).__name__}"
-            )
+            raise EnableBankingAPIError(f"Unexpected balances payload type: {type(data).__name__}")
         balances = data.get("balances", [])
         if not isinstance(balances, list):
             return []
@@ -301,7 +290,7 @@ class EnableBankingClient:
         """Return (accounts, rate_limited_ids) for the current session.
 
         Accounts are keyed by ``stable_id`` (Enable Banking's
-        ``identification_hash``), not the session ``uid`` — the uid changes on
+        ``identification_hash``), not the session ``uid`` > the uid changes on
         every reauth, the stable_id does not.
 
         ``fallback`` is the coordinator's previous per-stable_id data. If an
@@ -317,7 +306,7 @@ class EnableBankingClient:
               "accounts_data": [{"uid": "<uid>", "account_id": {"iban": ...}, ...}, ...],
               ...
             }
-        Some ASPSPs instead return rich dicts in ``accounts`` directly — this
+        Some ASPSPs instead return rich dicts in ``accounts`` directly > this
         implementation handles both.
         """
         session = await self.async_get_session()
@@ -337,7 +326,8 @@ class EnableBankingClient:
             # Visible at INFO/WARNING (not just DEBUG) because this is the
             # usual reason an entry loads but never gets sensors: the consent
             # was granted but the session exposes no accounts.
-            aspsp = session.get("aspsp") if isinstance(session.get("aspsp"), dict) else {}
+            aspsp_raw = session.get("aspsp")
+            aspsp: dict[str, Any] = aspsp_raw if isinstance(aspsp_raw, dict) else {}
             _LOGGER.warning(
                 "Enable Banking: session for %s returned no accounts "
                 "(status=%s, session keys=%s). If the bank consent was just "
@@ -366,9 +356,7 @@ class EnableBankingClient:
             # an account we already know is rate-limited this cycle.
             if skip_ids and stable_id in skip_ids:
                 if fallback and stable_id in fallback:
-                    _LOGGER.debug(
-                        "Skipping %s — rate-limit back-off active", uid[:8]
-                    )
+                    _LOGGER.debug("Skipping %s > rate-limit back-off active", uid[:8])
                     out[stable_id] = fallback[stable_id]
                 continue
 
@@ -402,9 +390,7 @@ class EnableBankingClient:
                     )
                     details = None
                 except EnableBankingAPIError as err:
-                    _LOGGER.debug(
-                        "Could not fetch account details for %s: %s", uid[:8], err
-                    )
+                    _LOGGER.debug("Could not fetch account details for %s: %s", uid[:8], err)
                     details = None
                 if details:
                     iban = _account_iban(details) or iban
@@ -429,7 +415,7 @@ class EnableBankingClient:
                 rate_limited.add(stable_id)
                 if prev is not None:
                     _LOGGER.warning(
-                        "Rate limited on %s — keeping previous balance "
+                        "Rate limited on %s > keeping previous balance "
                         "(PSD2 caps AIS polling at 4/day). Error: %s",
                         name,
                         err,
@@ -441,8 +427,7 @@ class EnableBankingClient:
                     out[stable_id] = prev
                 else:
                     _LOGGER.warning(
-                        "Rate limited on %s and no previous balance to fall "
-                        "back on. Error: %s",
+                        "Rate limited on %s and no previous balance to fall back on. Error: %s",
                         name,
                         err,
                     )
@@ -452,7 +437,7 @@ class EnableBankingClient:
                 continue
 
             _LOGGER.debug(
-                "account %s (%s) → %d balance object(s), types=%s",
+                "account %s (%s) > %d balance object(s), types=%s",
                 uid[:8],
                 iban or name,
                 len(balances),
@@ -469,13 +454,18 @@ class EnableBankingClient:
                 )
                 continue
 
-            amount_obj = picked.get("balance_amount") or picked.get("amount") or {}
-            try:
-                amount = float(amount_obj.get("amount"))
-            except (TypeError, ValueError):
-                _LOGGER.warning(
-                    "Could not parse amount for %s; picked=%r", uid, picked
-                )
+            amount_raw = picked.get("balance_amount") or picked.get("amount") or {}
+            amount_obj: dict[str, Any] = amount_raw if isinstance(amount_raw, dict) else {}
+            # A missing key and an unparseable value are the same failure to us
+            # (no usable number), so funnel both into one warning-and-skip.
+            amount: float | None = None
+            if (raw_value := amount_obj.get("amount")) is not None:
+                try:
+                    amount = float(raw_value)
+                except (TypeError, ValueError):
+                    amount = None
+            if amount is None:
+                _LOGGER.warning("Could not parse amount for %s; picked=%r", uid, picked)
                 continue
 
             out[stable_id] = AccountBalance(
@@ -509,7 +499,7 @@ def _collect_accounts(
       - A few older/alternative shapes put the full dicts in ``accounts``
         directly.
     ``accounts_data`` may itself be a list of dicts (each keyed by ``uid``)
-    or a dict keyed by uid — handle both.
+    or a dict keyed by uid > handle both.
     """
     metadata: dict[str, dict[str, Any]] = {}
 
@@ -540,8 +530,13 @@ def _collect_accounts(
 
     # De-duplicate while preserving order.
     seen: set[str] = set()
-    uids = [u for u in uids if not (u in seen or seen.add(u))]
-    return uids, metadata
+    unique_uids: list[str] = []
+    for uid_value in uids:
+        if uid_value in seen:
+            continue
+        seen.add(uid_value)
+        unique_uids.append(uid_value)
+    return unique_uids, metadata
 
 
 def _account_stable_id(meta: dict[str, Any], uid: str) -> str:
@@ -550,7 +545,7 @@ def _account_stable_id(meta: dict[str, Any], uid: str) -> str:
     Enable Banking regenerates the account ``uid`` on every session, so it is
     useless as a persistent key. ``identification_hash`` is account-intrinsic
     (a hash over IBAN+currency, or bank+country+resource_id for IBAN-less
-    accounts) and stays constant across sessions — that's what we key on.
+    accounts) and stays constant across sessions > that's what we key on.
     Falls back to ``uid`` only in the unlikely event the hash is absent.
     """
     hash_id = meta.get("identification_hash")

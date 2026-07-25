@@ -67,8 +67,8 @@ async def async_setup_entry(
 
     Accounts discovered on a later poll are added without a reload. Accounts
     present only in the on-disk cache are picked up at boot via
-    ``coordinator._cached`` (which has already seeded ``coordinator.data`` in
-    ``async_load_cache`` by the time we reach here).
+    ``coordinator.cached_stable_ids()`` (the cache has already seeded
+    ``coordinator.data`` in ``async_load_cache`` by the time we reach here).
     """
     coordinator = entry.runtime_data
     known: set[str] = set()
@@ -84,20 +84,16 @@ async def async_setup_entry(
         seen_ids: set[str] = set()
         if coordinator.data is not None:
             seen_ids.update(coordinator.data.accounts.keys())
-        # Also surface sensors for accounts that exist only in the cache
-        # (e.g. first boot after an HA restart, before the first post-boot
-        # poll has run). Keys are stable_ids.
-        seen_ids.update(
-            stable_id for stable_id in coordinator._cached
-        )  # noqa: SLF001 — intentional direct access
+        # coordinator.data only carries the accounts of the latest poll, so also
+        # surface sensors for accounts that exist only in the cache (e.g. first
+        # boot after an HA restart, before the first post-boot poll has run).
+        seen_ids.update(coordinator.cached_stable_ids())
 
         for stable_id in seen_ids:
             if stable_id in known:
                 continue
             known.add(stable_id)
-            new_entities.append(
-                EnableBankingBalanceSensor(coordinator, BALANCE_SENSOR, stable_id)
-            )
+            new_entities.append(EnableBankingBalanceSensor(coordinator, BALANCE_SENSOR, stable_id))
         if new_entities:
             async_add_entities(new_entities)
 
@@ -119,8 +115,8 @@ def _migrate_unique_ids(
     Enable Banking rotates the account ``uid`` on every reauth, so uid-based
     unique_ids used to spawn a fresh entity each time. We now key on
     ``stable_id`` (identification_hash). This re-points the *currently active*
-    entity for each account in place — preserving its entity_id and history —
-    using the live uid↔stable_id mapping from the latest poll. Historical
+    entity for each account in place, preserving its entity_id and history,
+    using the live uid-to-stable_id mapping from the latest poll. Historical
     orphans from earlier reauths can't be mapped and are left for the user to
     delete. Idempotent: after migration the old unique_id no longer exists.
     """
@@ -191,7 +187,7 @@ def _apply_iban_entity_ids(
 class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
     """Balance sensor for one Enable Banking account.
 
-    Always returns the last known balance — fresh from the coordinator if
+    Always returns the last known balance > fresh from the coordinator if
     the latest poll had it, otherwise from the persistent cache. The sensor
     never goes ``unavailable`` or returns ``unknown`` as long as at least
     one successful poll has ever happened for this account.
@@ -226,7 +222,7 @@ class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
         account = self._current_account
         if account is not None and account.iban:
             return account.iban
-        # No IBAN — unchanged behaviour (device-qualified "Balance …").
+        # No IBAN > unchanged behaviour (device-qualified "Balance …").
         if account is not None and account.name:
             return f"Balance {account.name}"
         return "Balance"
@@ -272,18 +268,17 @@ class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
         data = self.coordinator.data
         if data is not None and data.consent_expires_at is not None:
             attrs["consent_expires_at"] = data.consent_expires_at.isoformat()
-            attrs["consent_days_remaining"] = max(
-                0, (data.consent_expires_at - utcnow()).days
-            )
+            attrs["consent_days_remaining"] = max(0, (data.consent_expires_at - utcnow()).days)
 
         return attrs
 
 
-def _is_stale(
-    account: AccountBalance, update_interval: timedelta | None
-) -> bool:
-    """True if the last successful poll for this account is older than 2× interval."""
+def _is_stale(account: AccountBalance, update_interval: timedelta | None) -> bool:
+    """True if the last successful poll for this account is older than 2x interval."""
     if account.last_polled_at is None:
         return True
     interval = update_interval or timedelta(seconds=DEFAULT_SCAN_INTERVAL)
-    return (utcnow() - account.last_polled_at) > 2 * interval
+    # homeassistant-stubs types dt_util.utcnow as Incomplete, so the comparison
+    # below is Any as far as mypy is concerned. bool() keeps strict mode happy
+    # without an ignore comment.
+    return bool((utcnow() - account.last_polled_at) > 2 * interval)

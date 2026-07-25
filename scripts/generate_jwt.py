@@ -1,17 +1,21 @@
-"""Mint an Enable Banking JWT for the Home Assistant config flow.
+"""Mint an Enable Banking JWT for manual API calls.
 
 Enable Banking's API signs requests with a short-lived JWT (RS256) derived
-from your application's private key. This script builds one and prints it
-to stdout, ready to paste into Settings → Devices & Services → Enable
-Banking → Add → JWT field.
+from your application's private key. This script builds one and prints it to
+stdout so you can hit the API with curl or Postman.
+
+NOT part of the Home Assistant setup: the config flow asks for the private key
+and application ID and mints (and renews) its own token via
+``custom_components/enablebanking/jwt_helper.py``. This helper exists purely
+for debugging outside HA.
 
 Usage:
     python scripts/generate_jwt.py --key path/to/key.pem --app-id <UUID>
     python scripts/generate_jwt.py --key key.pem --app-id <UUID> --ttl 2 --copy
 
 Environment variable fallbacks (so you can omit the flags after first use):
-    ENABLEBANKING_KEY       — path to the private key (.pem)
-    ENABLEBANKING_APP_ID    — application UUID from the Enable Banking console
+    ENABLEBANKING_KEY       > path to the private key (.pem)
+    ENABLEBANKING_APP_ID    > application UUID from the Enable Banking console
 
 Requires once:
     pip install "pyjwt[crypto]"
@@ -29,14 +33,12 @@ from pathlib import Path
 try:
     import jwt
 except ImportError:
-    sys.exit(
-        'Missing dependency. Install with:\n    pip install "pyjwt[crypto]"\n'
-    )
+    sys.exit('Missing dependency. Install with:\n    pip install "pyjwt[crypto]"\n')
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Mint an Enable Banking JWT for the HA config flow.",
+        description="Mint an Enable Banking JWT for manual API calls (not needed for HA setup).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -92,7 +94,7 @@ def build_jwt(key_path: Path, app_id: str, ttl_hours: int) -> str:
         return jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
     except (ValueError, TypeError) as exc:
         sys.exit(
-            f"Could not sign JWT — is {key_path} a valid RSA private key in PEM format?\n{exc}"
+            f"Could not sign JWT > is {key_path} a valid RSA private key in PEM format?\n{exc}"
         )
 
 
@@ -100,9 +102,7 @@ def copy_to_clipboard(text: str) -> bool:
     if sys.platform != "win32":
         return False
     try:
-        subprocess.run(
-            ["clip"], input=text, text=True, check=True, shell=True, timeout=5
-        )
+        subprocess.run(["clip"], input=text, text=True, check=True, shell=True, timeout=5)
     except (subprocess.SubprocessError, OSError):
         return False
     return True
@@ -118,7 +118,7 @@ def main() -> int:
     # Stderr: friendly summary.
     print(f"\nJWT valid for {args.ttl}h (app {args.app_id[:8]}...).", file=sys.stderr)
     if args.copy and copy_to_clipboard(token):
-        print("Copied to clipboard — paste into the HA config flow.", file=sys.stderr)
+        print("Copied to clipboard.", file=sys.stderr)
     return 0
 
 

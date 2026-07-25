@@ -24,7 +24,7 @@ def draw_bank(img: Image.Image) -> None:
 
     # Layout (all values in pixels within 256x256).
     margin_x = 32
-    top = 64          # where the pediment starts
+    top = 64  # where the pediment starts
     roof_bottom = 100  # bottom of triangle / top of entablature
     entablature_h = 10
     base_top = 196

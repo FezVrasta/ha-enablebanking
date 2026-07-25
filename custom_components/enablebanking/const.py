@@ -17,19 +17,22 @@ CONF_PSU_TYPE: Final = "psu_type"
 CONF_AUTH_CODE: Final = "auth_code"
 CONF_CONSENT_EXPIRES_AT: Final = "consent_expires_at"
 
-# Fixed scheduled polling at these local hours — four polls/day, aligned
+# Fixed scheduled polling at these local hours > four polls/day, aligned
 # with typical waking life, sitting exactly at the PSD2 4/day cap with
 # regular 4-hour gaps (plus one 12-hour overnight gap).
 POLL_HOURS: Final = (10, 14, 18, 22)
 
 # Legacy / unused constants kept to avoid breaking imports in older
 # user automations referencing scan_interval. Scheduled polling ignores
-# these; they're only used by the staleness threshold calculation.
+# these; the only live use is as the nominal interval that the sensor's
+# `stale` attribute is measured against (2x this, so 16 h).
 DEFAULT_SCAN_INTERVAL: Final = 8 * 60 * 60
 
-# Sensor staleness: flag `stale: true` if the last successful poll is
-# more than this many hours old. Accounts for the 12-hour overnight gap
-# plus some slack for the occasional missed poll.
+# Sensor staleness threshold as originally designed: flag `stale: true` if the
+# last successful poll is more than this many hours old, which allows for the
+# 12-hour overnight gap plus slack. Currently NOT wired up: sensor._is_stale
+# compares against 2x DEFAULT_SCAN_INTERVAL (16 h) instead. Kept so the intended
+# figure is not lost; deciding between 16 h and 24 h is a behaviour change.
 STALE_THRESHOLD_HOURS: Final = 24
 
 # Storage (persistent on-disk balance cache, one file per config entry).

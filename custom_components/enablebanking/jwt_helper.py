@@ -13,7 +13,7 @@ import time
 
 import jwt as _jwt
 
-JWT_TTL_SECONDS: int = 82800  # 23 h — safely below the 86400 s hard cap
+JWT_TTL_SECONDS: int = 82800  # 23 h > safely below the 86400 s hard cap
 
 
 def mint_jwt(private_key_pem: str, app_id: str) -> str:
@@ -41,5 +41,5 @@ def jwt_seconds_remaining(token: str) -> int:
         payload_b64 += "=" * (-len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return int(payload.get("exp", 0)) - int(time.time())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return -1

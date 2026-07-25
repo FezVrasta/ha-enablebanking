@@ -13,7 +13,7 @@ Design notes (v0.5.0):
 
 - **Catch-up on startup**: if cache's ``last_polled_at`` is older than the
   most recent scheduled time that has passed, we trigger one refresh
-  (with 0–60 s jitter). Otherwise we just wait for the next slot. This is
+  (with 0-60 s jitter). Otherwise we just wait for the next slot. This is
   what keeps HA restarts from burning PSD2 quota.
 
 - **``_async_update_data`` NEVER raises.** On any failure (rate limit,
@@ -34,7 +34,7 @@ from typing import Any
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -50,10 +50,8 @@ from .const import (
     CONSENT_WARNING_DAYS,
     DOMAIN,
     POLL_HOURS,
-    STALE_THRESHOLD_HOURS,
     STORAGE_VERSION,
 )
-from .jwt_helper import JWT_TTL_SECONDS, jwt_seconds_remaining, mint_jwt
 from .errors import (
     EnableBankingAPIError,
     EnableBankingAuthenticationError,
@@ -61,6 +59,7 @@ from .errors import (
     EnableBankingRateLimitError,
     EnableBankingSessionError,
 )
+from .jwt_helper import jwt_seconds_remaining, mint_jwt
 from .models import AccountBalance, EnableBankingData
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=None,  # scheduled polling — we drive refresh ourselves
+            update_interval=None,  # scheduled polling > we drive refresh ourselves
         )
         self.client = client
         self.last_refresh: datetime | None = None
@@ -96,8 +95,8 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         self._cached: dict[str, AccountBalance] = {}
         # Pre-0.6.5 cache entries were keyed by the session uid and carry no
         # stable_id, so they can't seed a (stable_id-keyed) sensor directly.
-        # We hold them here and adopt them on the first poll — which knows the
-        # uid↔stable_id mapping — so last-known balances survive the upgrade
+        # We hold them here and adopt them on the first poll > which knows the
+        # uid-to-stable_id mapping > so last-known balances survive the upgrade
         # instead of the sensors going unavailable until a fresh poll succeeds.
         self._legacy_by_uid: dict[str, AccountBalance] = {}
         self._store: Store[dict[str, Any]] = Store(
@@ -116,12 +115,13 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
     # Scheduling                                                           #
     # ------------------------------------------------------------------ #
 
-    def register_scheduled_polls(self) -> list:
+    def register_scheduled_polls(self) -> list[CALLBACK_TYPE]:
         """Register an ``async_track_time_change`` per POLL_HOUR.
 
-        Returns the unsub callbacks — caller should attach them to
+        Returns the unsub callbacks > caller should attach them to
         ``entry.async_on_unload``.
         """
+
         async def _on_scheduled(now: datetime) -> None:
             _LOGGER.debug(
                 "Scheduled poll fired for entry %s at %s (minute_offset=%d)",
@@ -131,7 +131,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             )
             await self.async_refresh()
 
-        unsubs = []
+        unsubs: list[CALLBACK_TYPE] = []
         for hour in POLL_HOURS:
             unsubs.append(
                 async_track_time_change(
@@ -155,14 +155,11 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         """The most recent of the POLL_HOURS slots at or before ``now`` (UTC)."""
         local_now = dt_util.as_local(now)
         today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        candidates = [
-            today.replace(hour=h, minute=self._minute_offset)
-            for h in POLL_HOURS
-        ]
+        candidates = [today.replace(hour=h, minute=self._minute_offset) for h in POLL_HOURS]
         past = [c for c in candidates if c <= local_now]
         if past:
             return dt_util.as_utc(max(past))
-        # Before today's first slot — most recent is yesterday's last slot
+        # Before today's first slot > most recent is yesterday's last slot
         yesterday_last = (today - timedelta(days=1)).replace(
             hour=POLL_HOURS[-1], minute=self._minute_offset
         )
@@ -189,7 +186,9 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         Call this once in ``async_setup_entry`` before forwarding platforms.
         """
         stored = await self._store.async_load() or {}
-        for key, raw in (stored.get("accounts") or {}).items():
+        # The stored key is ignored on purpose: which key an entry belongs
+        # under is re-derived below (stable_id, or uid for pre-0.6.5 files).
+        for raw in (stored.get("accounts") or {}).values():
             if not isinstance(raw, dict):
                 continue
             ab = _balance_from_stored(raw)
@@ -219,18 +218,24 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
     async def _save_cache(self) -> None:
         await self._store.async_save(
             {
-                "last_polled_at": self.last_refresh.isoformat()
-                if self.last_refresh
-                else None,
+                "last_polled_at": self.last_refresh.isoformat() if self.last_refresh else None,
                 "accounts": {
-                    stable_id: _balance_to_stored(ab)
-                    for stable_id, ab in self._cached.items()
+                    stable_id: _balance_to_stored(ab) for stable_id, ab in self._cached.items()
                 },
             }
         )
 
     def cached_account(self, stable_id: str) -> AccountBalance | None:
         return self._cached.get(stable_id)
+
+    def cached_stable_ids(self) -> set[str]:
+        """Every account we hold a cached balance for.
+
+        The sensor platform needs this at boot: ``self.data`` only reflects the
+        latest poll, while the cache also covers accounts whose last poll
+        happened before the current HA run.
+        """
+        return set(self._cached)
 
     # ------------------------------------------------------------------ #
     # Refresh                                                              #
@@ -248,17 +253,17 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             return
 
         remaining = jwt_seconds_remaining(self.client._jwt)
-        if remaining > 1800:  # more than 30 min left — nothing to do
+        if remaining > 1800:  # more than 30 min left > nothing to do
             return
 
         _LOGGER.debug(
-            "JWT for entry %s expires in %ds — auto-renewing",
+            "JWT for entry %s expires in %ds > auto-renewing",
             self.config_entry.entry_id,
             remaining,
         )
         try:
             new_jwt = mint_jwt(private_key, app_id)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             _LOGGER.warning("Failed to auto-renew JWT: %s", err)
             return
 
@@ -270,7 +275,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         _LOGGER.debug("JWT auto-renewed for entry %s", self.config_entry.entry_id)
 
     async def _async_update_data(self) -> EnableBankingData:
-        """Fetch balances. NEVER raises — always returns cached data on error."""
+        """Fetch balances. NEVER raises > always returns cached data on error."""
         await self._async_maybe_renew_jwt()
         now = dt_util.utcnow()
         skip_ids = {
@@ -293,19 +298,17 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             )
         except EnableBankingAuthenticationError as err:
             self.last_error = "auth"
-            _LOGGER.warning("JWT rejected: %s — triggering reauth", err)
+            _LOGGER.warning("JWT rejected: %s > triggering reauth", err)
             self.config_entry.async_start_reauth(self.hass)
             return self._cached_snapshot()
         except EnableBankingSessionError as err:
             self.last_error = "consent_expired"
-            _LOGGER.warning("Session expired: %s — triggering reauth", err)
+            _LOGGER.warning("Session expired: %s > triggering reauth", err)
             self.config_entry.async_start_reauth(self.hass)
             return self._cached_snapshot()
         except EnableBankingRateLimitError as err:
             self.last_error = "rate_limited"
-            _LOGGER.warning(
-                "Session-level PSD2 rate limit; keeping cached balances: %s", err
-            )
+            _LOGGER.warning("Session-level PSD2 rate limit; keeping cached balances: %s", err)
             return self._cached_snapshot()
         except EnableBankingConnectionError as err:
             self.last_error = "network"
@@ -368,7 +371,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
             self.hass,
             message=(
                 f"Your {aspsp_name} Enable Banking consent expires in "
-                f"{days_remaining} day(s). Open **Settings → Devices & Services → "
+                f"{days_remaining} day(s). Open **Settings > Devices & Services > "
                 f"Enable Banking ({aspsp_name})** and click **Reconfigure** to renew "
                 "before it expires and balances go stale."
             ),
@@ -423,12 +426,8 @@ def _balance_to_stored(ab: AccountBalance) -> dict[str, Any]:
         "balance": ab.balance,
         "balance_type": ab.balance_type,
         "reference_date": ab.reference_date,
-        "last_polled_at": ab.last_polled_at.isoformat()
-        if ab.last_polled_at
-        else None,
-        "rate_limited_until": ab.rate_limited_until.isoformat()
-        if ab.rate_limited_until
-        else None,
+        "last_polled_at": ab.last_polled_at.isoformat() if ab.last_polled_at else None,
+        "rate_limited_until": ab.rate_limited_until.isoformat() if ab.rate_limited_until else None,
     }
 
 

@@ -50,7 +50,7 @@ class EnableBankingEntity(CoordinatorEntity[EnableBankingCoordinator]):
         model_parts = [p for p in (country, psu_type) if p]
 
         # Put the bank in `manufacturer` so the service-info card reads
-        # "<country · psu_type> / door <Bank>" — that's the info users
+        # "<country · psu_type> / door <Bank>" > that's the info users
         # actually care about on a balance card. The "data via Enable
         # Banking" provenance stays visible through the attribution on
         # each entity and the integration card title.

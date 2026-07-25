@@ -1,0 +1,75 @@
+[project]
+name = "ha-enablebanking"
+# Not the shipped version number: custom_components/enablebanking/manifest.json
+# is the single source of truth that HACS and the release-gate CI job read.
+# The gate fails a tag build if these two ever drift apart.
+version = "0.6.9"
+description = "Enable Banking account balances for Home Assistant (PSD2 AIS via the Enable Banking aggregator)"
+# 3.14.2, not the 3.13 the sibling repos ask for: every homeassistant release in
+# the range below declares python_requires >=3.14.2, so a looser floor here makes
+# "uv sync --extra dev" unsolvable rather than merely permissive.
+requires-python = ">=3.14.2"
+license = "MIT"
+
+dependencies = [
+    "homeassistant>=2026.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "homeassistant-stubs",
+    "mypy",
+    "pre-commit",
+    "pylint",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-homeassistant-custom-component",
+    "ruff",
+    "codespell",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+# HA custom component > nothing to build/install as a wheel
+package = false
+
+[tool.ruff]
+# Deliberately behind requires-python: at py314 the formatter rewrites every
+# "except (A, B):" into PEP 758 "except A, B:", which no Python before 3.14 can
+# even parse. Adding CI is not the place to make the integration unloadable on an
+# older HA container, and pinning the target here also keeps the formatter output
+# identical across ruff 0.15 and 0.16.
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "T20",
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The helper scripts under scripts/ are operator tools run from a terminal, so
+# printing to stdout is the whole point (T20 bans print in the integration).
+"scripts/*.py" = ["T20"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+# Only the integration is type checked. scripts/generate_brand.py imports Pillow,
+# a one-off tool dependency that is deliberately not in the dev extra, so pointing
+# mypy at scripts/ would fail on a missing stub instead of on real type errors.
+files = ["custom_components/enablebanking"]
