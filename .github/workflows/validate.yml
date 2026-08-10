@@ -12,7 +12,7 @@ jobs:
   validate-hacs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pinned to a commit rather than @main: hacs/action is a third-party Docker action
       # that runs with repo context, and an unpinned ref means every scheduled run can
       # execute code nobody reviewed. Upstream's newest tag (22.5.0) is years stale and
@@ -25,7 +25,7 @@ jobs:
   validate-hassfest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Same reasoning as above. home-assistant/actions only ever tagged 1.0.0, so master
       # is the documented ref and this SHA is master.
       - name: Hassfest Validation
@@ -34,8 +34,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      # Pinned to a SHA, not a tag: setup-uv stopped publishing floating major
+      # tags at v8 as a supply chain measure, so "@v9" does not resolve.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           # No uv.lock is committed, so nothing can match the cache key. On the
           # default (auto) setup-uv turns the cache on and then warns on every run
@@ -73,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-hacs, validate-hassfest, lint]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag must match manifest version
         run: |
           python3 - <<'PY'
