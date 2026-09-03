@@ -303,6 +303,20 @@ class TestStatisticsImport:
         assert metadata["unit_of_measurement"] == "EUR"
         assert "NL91ABNA0417164300" in str(metadata["name"])
 
+    def test_name_carries_the_currency(self) -> None:
+        """Multi-currency accounts share one IBAN across sub-accounts.
+
+        Revolut and Wise expose the same IBAN for a EUR and a USD balance. With
+        the currency left out, both series read identically in the statistics
+        picker, which does not show the unit column — so the only way to tell
+        them apart would be to import one and see which graph moved.
+        """
+        captured = self._import(self._totals(), date(2026, 9, 1))
+
+        metadata, _points = captured[statistic_id("hash-one", STATISTIC_SPENDING)]
+
+        assert metadata["name"] == "NL91ABNA0417164300 EUR spending"
+
     def test_statistic_id_keeps_the_iban_out_of_the_identifier(self) -> None:
         """The id is visible in Developer tools and in every screenshot of it."""
         assert "NL91ABNA" not in statistic_id("NL91ABNA0417164300", STATISTIC_SPENDING)
