@@ -88,8 +88,8 @@ Select ASPSP **Revolut** and account type **Business**. Enable Banking uses a si
 
 | Property | Value |
 |----------|-------|
-| State | EUR balance (closing booked preferred, falls back to interim available) |
-| Unit | Account currency |
+| State | Account balance (closing booked preferred, falls back to interim available) |
+| Unit | The account's own currency — `€` for euro accounts, otherwise the ISO 4217 code (`SEK`, `GBP`, …) |
 | State class | `total` |
 | Device class | `monetary` |
 
