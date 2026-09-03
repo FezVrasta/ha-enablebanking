@@ -99,5 +99,21 @@
         "name": "Spent last 30 days"
       }
     }
+  },
+  "services": {
+    "get_transactions": {
+      "name": "Get transactions",
+      "description": "Return the stored transactions for every configured account, newest first. Reads the cache written by the last poll, so it costs no PSD2 quota. Returns response data.",
+      "fields": {
+        "days": {
+          "name": "Days",
+          "description": "How far back to return, counting today."
+        },
+        "account": {
+          "name": "Account",
+          "description": "Limit to one account, by IBAN or by the name the bank reports."
+        }
+      }
+    }
   }
 }

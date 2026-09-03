@@ -29,6 +29,7 @@ Design notes (v0.5.0):
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_TRANSACTION_HISTORY_DAYS,
     DOMAIN,
     MAX_REMEMBERED_TRANSACTIONS,
+    MAX_STORED_TRANSACTIONS,
     POLL_HOURS,
     STATISTIC_SPENDING,
     STORAGE_VERSION,
@@ -120,6 +122,10 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
         #: recorder back, which is what makes a repeated import correct itself
         #: instead of doubling.
         self._daily_totals: dict[str, dict[str, dict[str, float]]] = {}
+        #: The most recent window of booked transactions per account, newest
+        #: first. Persisted so the list survives a restart without spending a
+        #: poll to rebuild it.
+        self._transactions: dict[str, list[Transaction]] = {}
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.cache"
         )
@@ -234,6 +240,22 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 if isinstance(day, str) and isinstance(values, dict)
             }
 
+        for stable_id, raw_list in (stored.get("transactions") or {}).items():
+            if not isinstance(stable_id, str) or not isinstance(raw_list, list):
+                continue
+            restored: list[Transaction] = []
+            for raw in raw_list:
+                if isinstance(raw, dict):
+                    try:
+                        restored.append(Transaction(**raw))
+                    except TypeError:
+                        # A cache written by a different version of the model.
+                        # Dropping it costs one poll to rebuild, which is far
+                        # better than failing setup over a stale file.
+                        _LOGGER.debug("Skipping unreadable cached transaction: %r", raw)
+            if restored:
+                self._transactions[stable_id] = restored
+
         self.last_refresh = _parse_iso(stored.get("last_polled_at"))
 
         if self._cached:
@@ -264,6 +286,11 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                     if keys
                 },
                 "daily_totals": self._daily_totals,
+                "transactions": {
+                    stable_id: [asdict(tx) for tx in txs]
+                    for stable_id, txs in self._transactions.items()
+                    if txs
+                },
             }
         )
 
@@ -432,6 +459,10 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 total += values.get(STATISTIC_SPENDING, 0.0)
         return round(total, 2)
 
+    def transactions_for(self, stable_id: str) -> list[Transaction]:
+        """The stored window for one account, newest first."""
+        return list(self._transactions.get(stable_id, []))
+
     async def _async_fetch_transactions(
         self, accounts: dict[str, AccountBalance], skip_ids: set[str]
     ) -> dict[str, list[Transaction]]:
@@ -505,6 +536,16 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 window_start,
             )
             self._daily_totals[stable_id] = merged
+            # Keep the window itself, not just its daily totals. It is already
+            # fetched and would otherwise be discarded, and it is what the
+            # get_transactions service hands back -- HA can backdate statistics
+            # but not states, so a queryable list is the only way to reach the
+            # history that predates the integration being switched on.
+            self._transactions[stable_id] = sorted(
+                (tx for tx in parsed if tx.booked),
+                key=lambda tx: (tx.booking_date or tx.value_date or "", tx.key),
+                reverse=True,
+            )[:MAX_STORED_TRANSACTIONS]
             try:
                 async_import_statistics(self.hass, account, merged, window_start)
             except Exception:

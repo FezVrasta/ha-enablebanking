@@ -159,6 +159,26 @@ Statistics card, backfilled across the whole history window on first run, and ne
 purged — unlike entity history, which respects `purge_keep_days`. Add a **Statistics**
 card, or find them in **Developer tools > Statistics**.
 
+**The stored history, on request.** Statistics cover spending as totals, but the
+individual transactions behind them are reachable through a service:
+
+```yaml
+action: enablebanking.get_transactions
+data:
+  days: 30
+response_variable: history
+```
+
+It reads the cache from the last poll, so it costs no PSD2 quota and works offline.
+Optionally filter to one account with `account:` (an IBAN, or the name the bank
+reports).
+
+This exists because of a Home Assistant limitation worth knowing about: statistics can
+be backdated, states cannot. So the transactions from before you enabled the option —
+the ones the first poll recorded silently — can never appear in the logbook, and firing
+them retroactively would only stamp them all with today's date and trigger every
+listening automation. The service hands them back with their real dates instead.
+
 **Two sensors per account**, `spend_today` and `spend_30d`, both `device_class:
 monetary` in the account's own currency.
 
