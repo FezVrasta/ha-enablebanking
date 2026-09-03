@@ -38,9 +38,23 @@ class EnableBankingSensorDescription(SensorEntityDescription):
     account_attrs_fn: Callable[[AccountBalance], dict[str, Any]] | None = None
 
 
+#: ISO 4217 code -> the unit string to display for it.
+#:
+#: Only EUR is mapped, and only for backwards compatibility: every balance
+#: sensor this integration has ever created carried CURRENCY_EURO ("€"), so
+#: returning "EUR" for those accounts would register as a unit change and park
+#: their long-term statistics until the user resolves it by hand in Developer
+#: tools > Statistics. Currencies that were previously mislabelled as euro have
+#: no such history to protect, so they get their plain ISO code.
+_CURRENCY_UNITS: dict[str, str] = {"EUR": CURRENCY_EURO}
+
+
 BALANCE_SENSOR = EnableBankingSensorDescription(
     key="balance",
     translation_key="balance",
+    # Fallback only. The real unit is per-account and comes from the property
+    # override on the entity below; this is what a sensor shows in the window
+    # before any account data has resolved.
     native_unit_of_measurement=CURRENCY_EURO,
     device_class=SensorDeviceClass.MONETARY,
     state_class=SensorStateClass.TOTAL,
@@ -243,6 +257,23 @@ class EnableBankingBalanceSensor(EnableBankingEntity, SensorEntity):
         # blip or a rate-limit response. We want exactly the opposite:
         # show the last known value with a `stale` attribute if need be.
         return self._current_account is not None
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """The account's own currency.
+
+        The description carries CURRENCY_EURO, which is correct only for euro
+        accounts: a SEK, GBP, CHF or PLN balance was rendered with a euro sign
+        in front of a number that is not euros. Enable Banking reports the
+        currency alongside every balance and it is already stored on the
+        account, so read it from there and fall back to the description only
+        while no account has resolved yet.
+        """
+        account = self._current_account
+        if account is None or not account.currency:
+            return self.entity_description.native_unit_of_measurement
+        code = account.currency.upper()
+        return _CURRENCY_UNITS.get(code, code)
 
     @property
     def native_value(self) -> StateType:
