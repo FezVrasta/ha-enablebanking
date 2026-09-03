@@ -86,3 +86,8 @@ STATISTIC_INCOME: Final = "income"
 #: cache file on a busy account; well above the number of transactions a
 #: 90-day window can hold, so it never truncates a live window in practice.
 MAX_REMEMBERED_TRANSACTIONS: Final = 2000
+
+#: Transactions retained per account for the get_transactions service. Bounds
+#: the cache file; comfortably more than a 90-day window holds for a normal
+#: account, so it only bites on a very busy one.
+MAX_STORED_TRANSACTIONS: Final = 1000

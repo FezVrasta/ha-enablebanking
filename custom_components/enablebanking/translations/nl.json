@@ -104,5 +104,21 @@
         "name": "Laatste 30 dagen uitgegeven"
       }
     }
+  },
+  "services": {
+    "get_transactions": {
+      "name": "Transacties ophalen",
+      "description": "Geeft de opgeslagen transacties van elke geconfigureerde rekening terug, nieuwste eerst. Leest de cache van de laatste poll en kost dus geen PSD2-quota. Geeft responsdata terug.",
+      "fields": {
+        "days": {
+          "name": "Dagen",
+          "description": "Hoe ver terug er wordt teruggegeven, inclusief vandaag."
+        },
+        "account": {
+          "name": "Rekening",
+          "description": "Beperk tot één rekening, op IBAN of op de naam die de bank doorgeeft."
+        }
+      }
+    }
   }
 }
