@@ -53,6 +53,12 @@ PSU_BUSINESS: Final = "business"
 
 CONSENT_WARNING_DAYS: Final = 14
 
+#: Unit shown before any account has resolved its own currency.
+#: An ISO 4217 code, not a symbol: Home Assistant documents
+#: `SensorDeviceClass.MONETARY` as taking a code, and every other currency the
+#: integration reports is already rendered that way.
+DEFAULT_CURRENCY: Final = "EUR"
+
 # --- Transactions (opt-in) ------------------------------------------------ #
 
 #: Options-flow keys. Transactions are off by default: fetching them costs one
