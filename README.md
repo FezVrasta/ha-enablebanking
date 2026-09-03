@@ -224,6 +224,21 @@ e.g. `{accounts: [str x 2], aspsp: {country: str, name: str}}`) rather than the
 body itself, so IBANs, balances and account-holder names do not reach
 `home-assistant.log`. Logs are safe to attach to an issue as-is.
 
+## Development
+
+```bash
+uv sync --extra dev
+uv run pytest          # the test suite
+uv run ruff check .    # lint
+uv run ruff format .   # format
+uv run mypy            # types (scoped to custom_components/enablebanking)
+```
+
+CI runs all four on every push, plus hassfest and the HACS validator. The tests
+need no network and no Enable Banking account — every API call is mocked, and
+the RSA key the JWT tests sign with is generated in-process rather than
+committed.
+
 ## License
 
 MIT
