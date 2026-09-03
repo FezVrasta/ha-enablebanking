@@ -167,13 +167,18 @@ def async_import_statistics(
         if not points:
             continue
 
-        name = account.iban or account.name or account.stable_id[:8]
+        # Currency is part of the name, not decoration: a multi-currency
+        # account (Revolut, Wise) exposes one IBAN across several sub-accounts,
+        # so without it two series read identically in the statistics picker
+        # and differ only by a unit column that the picker does not show.
+        identifier = account.iban or account.name or account.stable_id[:8]
+        name_parts = [part for part in (identifier, account.currency, label) if part]
         async_add_external_statistics(
             hass,
             StatisticMetaData(
                 mean_type=StatisticMeanType.NONE,
                 has_sum=True,
-                name=f"{name} {label}",
+                name=" ".join(name_parts),
                 source=DOMAIN,
                 statistic_id=statistic_id(account.stable_id, suffix),
                 unit_class=None,
