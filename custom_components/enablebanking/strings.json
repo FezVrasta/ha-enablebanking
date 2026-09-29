@@ -83,7 +83,7 @@
   "entity": {
     "event": {
       "transaction": {
-        "name": "Transaction",
+        "name": "{account} transaction",
         "state_attributes": {
           "event_type": {
             "state": {
@@ -98,10 +98,10 @@
         "name": "Balance"
       },
       "spend_today": {
-        "name": "Spent today"
+        "name": "{account} spent today"
       },
       "spend_30d": {
-        "name": "Spent last 30 days"
+        "name": "{account} spent last 30 days"
       }
     }
   },

@@ -83,7 +83,7 @@
   "entity": {
     "event": {
       "transaction": {
-        "name": "Transactie",
+        "name": "{account} transactie",
         "state_attributes": {
           "event_type": {
             "state": {
@@ -98,10 +98,10 @@
         "name": "Saldo"
       },
       "spend_today": {
-        "name": "Vandaag uitgegeven"
+        "name": "{account} vandaag uitgegeven"
       },
       "spend_30d": {
-        "name": "Laatste 30 dagen uitgegeven"
+        "name": "{account} laatste 30 dagen uitgegeven"
       }
     }
   },

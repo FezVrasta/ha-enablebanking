@@ -23,7 +23,13 @@ from homeassistant.util.dt import utcnow
 
 from .const import CONF_ASPSP_NAME, DEFAULT_CURRENCY, DEFAULT_SCAN_INTERVAL, DOMAIN
 from .coordinator import EnableBankingConfigEntry, EnableBankingCoordinator
-from .entity import EnableBankingEntity, account_unique_id
+from .entity import (
+    EnableBankingEntity,
+    account_entity_id,
+    account_label,
+    account_unique_id,
+    async_rename_legacy_entity_ids,
+)
 from .models import AccountBalance
 
 _LOGGER = logging.getLogger(__name__)
@@ -93,6 +99,13 @@ SPEND_SENSORS: tuple[EnableBankingSpendDescription, ...] = (
 )
 
 
+#: Object id suffix per spend sensor, after the account: `sensor.<iban>_spent_today`.
+_SPEND_OBJECT_IDS: dict[str, str] = {
+    "spend_today": "spent_today",
+    "spend_30d": "spent_last_30_days",
+}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: EnableBankingConfigEntry,
@@ -144,6 +157,8 @@ async def async_setup_entry(
 
         # Give IBAN accounts a clean `sensor.<iban>` entity_id.
         _apply_iban_entity_ids(hass, entry, coordinator)
+        # And the spend sensors their account in the id, instead of `_2`.
+        async_rename_legacy_entity_ids(hass, entry, coordinator, "sensor", _SPEND_OBJECT_IDS)
 
     _async_add_for_new_accounts()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_for_new_accounts))
@@ -356,6 +371,18 @@ class EnableBankingSpendSensor(EnableBankingEntity, SensorEntity):
 
     entity_description: EnableBankingSpendDescription
     coordinator: EnableBankingCoordinator
+
+    def __init__(
+        self,
+        coordinator: EnableBankingCoordinator,
+        description: EnableBankingSpendDescription,
+        stable_id: str,
+    ) -> None:
+        super().__init__(coordinator, description, stable_id)
+        self._attr_translation_placeholders = {"account": account_label(coordinator, stable_id)}
+        self.entity_id = account_entity_id(
+            "sensor", coordinator, stable_id, _SPEND_OBJECT_IDS[description.key]
+        )
 
     @property
     def native_unit_of_measurement(self) -> str | None:

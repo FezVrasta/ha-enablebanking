@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .const import CONF_ASPSP_COUNTRY, CONF_ASPSP_NAME, CONF_PSU_TYPE, DOMAIN
-from .coordinator import EnableBankingCoordinator
+from .coordinator import EnableBankingConfigEntry, EnableBankingCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def account_unique_id(entry_id: str, stable_id: str, key: str) -> str:
@@ -61,3 +68,77 @@ class EnableBankingEntity(CoordinatorEntity[EnableBankingCoordinator]):
             model=" · ".join(model_parts) if model_parts else "Account",
             entry_type=DeviceEntryType.SERVICE,
         )
+
+
+def account_entity_id(
+    domain: str, coordinator: EnableBankingCoordinator, stable_id: str, suffix: str
+) -> str:
+    """The entity_id a new per-account entity asks for: ``<domain>.<account>_<suffix>``.
+
+    Without the bank in front, like the balance sensor's ``sensor.<iban>``. The
+    friendly name keeps the bank, since it comes from the device.
+    """
+    return f"{domain}.{slugify(account_label(coordinator, stable_id))}_{suffix}"
+
+
+def account_label(coordinator: EnableBankingCoordinator, stable_id: str) -> str:
+    """How an account is told apart in its entities' names.
+
+    The IBAN, like the balance sensor's name, else the account name, else a
+    short token. A bank holds several accounts under one device, so a per-account
+    entity named only "Spent today" collides with its siblings as `_2`, `_3`.
+    """
+    account = None
+    if coordinator.data is not None:
+        account = coordinator.data.accounts.get(stable_id)
+    if account is None:
+        account = coordinator.cached_account(stable_id)
+    if account is not None:
+        if account.iban:
+            return account.iban
+        if account.name:
+            return account.name
+    return stable_id[:8]
+
+
+@callback
+def async_rename_legacy_entity_ids(
+    hass: HomeAssistant,
+    entry: EnableBankingConfigEntry,
+    coordinator: EnableBankingCoordinator,
+    domain: str,
+    object_ids: dict[str, str],
+) -> None:
+    """Move per-account entities off the ids they got before names had the account.
+
+    ``object_ids`` maps a description key to the object id suffix its entities
+    use, e.g. ``spend_today`` to ``spent_today``. From the bare name, entities
+    used to get ``<bank>_spent_today``, and the second account
+    ``<bank>_spent_today_2``; they now get ``<account>_spent_today``, matching
+    the balance sensor's ``sensor.<iban>``.
+
+    Guards, as for the balance sensor's IBAN rename: only an id still in that
+    auto-generated shape is touched, so a user's own rename is never
+    overwritten, and only when the new id is free.
+    """
+    registry = er.async_get(hass)
+    device = slugify(entry.data.get(CONF_ASPSP_NAME, "Enable Banking"))
+    stable_ids = set(coordinator.cached_stable_ids())
+    if coordinator.data is not None:
+        stable_ids.update(coordinator.data.accounts)
+
+    for stable_id in stable_ids:
+        label = slugify(account_label(coordinator, stable_id))
+        for key, suffix in object_ids.items():
+            unique_id = account_unique_id(entry.entry_id, stable_id, key)
+            entity_id = registry.async_get_entity_id(domain, DOMAIN, unique_id)
+            if entity_id is None:
+                continue
+            if not re.fullmatch(rf"{domain}\.{device}_{suffix}(_\d+)?", entity_id):
+                continue
+            target = f"{domain}.{label}_{suffix}"
+            if registry.async_get(target) is not None:
+                _LOGGER.debug("Enable Banking: cannot rename %s to %s (taken)", entity_id, target)
+                continue
+            registry.async_update_entity(entity_id, new_entity_id=target)
+            _LOGGER.info("Enable Banking: renamed %s to %s", entity_id, target)

@@ -21,7 +21,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import EVENT_TYPE_TRANSACTION
 from .coordinator import EnableBankingConfigEntry, EnableBankingCoordinator
-from .entity import EnableBankingEntity
+from .entity import (
+    EnableBankingEntity,
+    account_entity_id,
+    account_label,
+    async_rename_legacy_entity_ids,
+)
 
 PARALLEL_UPDATES = 0
 
@@ -63,6 +68,10 @@ async def async_setup_entry(
         async_add_entities(
             EnableBankingTransactionEvent(coordinator, stable_id) for stable_id in new
         )
+        # Move entities created before names carried the account off `_2`.
+        async_rename_legacy_entity_ids(
+            hass, entry, coordinator, "event", {TRANSACTION_EVENT.key: "transaction"}
+        )
 
     _async_add_for_new_accounts()
     entry.async_on_unload(coordinator.async_add_listener(_async_add_for_new_accounts))
@@ -81,6 +90,8 @@ class EnableBankingTransactionEvent(EnableBankingEntity, EventEntity):
         """
         super().__init__(coordinator, TRANSACTION_EVENT, stable_id)
         self._attr_event_types = [EVENT_TYPE_TRANSACTION]
+        self._attr_translation_placeholders = {"account": account_label(coordinator, stable_id)}
+        self.entity_id = account_entity_id("event", coordinator, stable_id, "transaction")
 
     @callback
     def _handle_coordinator_update(self) -> None:
