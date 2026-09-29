@@ -38,7 +38,7 @@ from .errors import (
     EnableBankingRateLimitError,
     EnableBankingSessionError,
 )
-from .models import AccountBalance
+from .models import AccountBalance, transaction_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,10 +49,11 @@ _LOGGER = logging.getLogger(__name__)
 #: names, so depth costs structure detail but never personal data.
 _MAX_SHAPE_DEPTH: int = 3
 
-#: Upper bound on continuation-key pages per account per poll. 90 days of a
-#: busy current account is comfortably under this; the cap exists so a server
-#: that keeps handing back a key cannot spin the poll forever.
-MAX_TRANSACTION_PAGES: int = 20
+#: Last-resort bound on continuation-key pages per account per poll. A key the
+#: server repeats already ends the loop; this only catches one that keeps
+#: minting new keys. Page size is the bank's choice (some send 20 entries), so
+#: the cap has to sit well above what a busy account's window needs.
+MAX_TRANSACTION_PAGES: int = 100
 
 _BALANCE_TYPE_PREFERENCE: tuple[str, ...] = (
     "CLBD",  # closing booked
@@ -288,9 +289,11 @@ class EnableBankingClient:
         """Return raw transaction objects for one account since ``date_from``.
 
         Enable Banking pages with an opaque ``continuation_key``: a response
-        carrying one has more behind it. The loop is bounded by ``max_pages``
-        rather than trusting the server to stop, because a key that never
-        clears would otherwise spin inside a single coordinator poll, holding
+        carrying one has more behind it, even when its own list is empty (the
+        docs say to keep calling until no key comes back). A key the server
+        already sent means it is looping, so paging stops there. ``max_pages``
+        is the backstop for a server that keeps minting new keys: either way a
+        loop would otherwise spin inside a single coordinator poll, holding
         the update lock and spending rate-limit budget until the account is
         locked out for the day.
 
@@ -300,6 +303,12 @@ class EnableBankingClient:
         """
         params: dict[str, str] = {"date_from": date_from.isoformat()}
         transactions: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        # An entry repeated on a later page would be summed twice into the
+        # daily totals. Only entries with a real bank id are deduplicated (two
+        # identical entries without one may genuinely be two purchases), and
+        # per status, so a pending copy never displaces the booked one.
+        seen_ids: set[tuple[str, str]] = set()
 
         for page in range(max_pages):
             data = await self._request("GET", f"/accounts/{account_id}/transactions", params=params)
@@ -309,11 +318,28 @@ class EnableBankingClient:
                 )
             batch = data.get("transactions")
             if isinstance(batch, list):
-                transactions.extend(item for item in batch if isinstance(item, dict))
+                for item in batch:
+                    if not isinstance(item, dict):
+                        continue
+                    if (bank_id := transaction_id(item)) is not None:
+                        identity = (bank_id, str(item.get("status") or ""))
+                        if identity in seen_ids:
+                            continue
+                        seen_ids.add(identity)
+                    transactions.append(item)
 
             continuation_key = data.get("continuation_key")
             if not isinstance(continuation_key, str) or not continuation_key:
                 break
+            if continuation_key in seen_keys:
+                _LOGGER.warning(
+                    "Stopped paging transactions for %s: the server repeated a "
+                    "continuation key after %d pages; some history may be missing",
+                    account_id[:8],
+                    page + 1,
+                )
+                break
+            seen_keys.add(continuation_key)
             params["continuation_key"] = continuation_key
             if page == max_pages - 1:
                 _LOGGER.warning(

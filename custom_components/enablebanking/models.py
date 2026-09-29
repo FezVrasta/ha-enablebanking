@@ -12,6 +12,20 @@ from datetime import datetime
 #: debit as income, which would invert the sign of the whole spending series.
 DEBIT_INDICATORS: frozenset[str] = frozenset({"DBIT", "DRBT"})
 
+#: Berlin Group placeholder some ASPSPs send in ``entry_reference`` instead of
+#: leaving it out, typically on pending entries. Taken at face value it would
+#: give every such entry the same identity.
+_PLACEHOLDER_IDS: frozenset[str] = frozenset({"NOTPROVIDED"})
+
+
+def transaction_id(raw: dict[str, object]) -> str | None:
+    """The bank's own id for an entry, or None when it sent no real one."""
+    for field_name in ("entry_reference", "transaction_id"):
+        value = raw.get(field_name)
+        if isinstance(value, str) and value and value.upper() not in _PLACEHOLDER_IDS:
+            return value
+    return None
+
 
 @dataclass(slots=True)
 class AccountBalance:
@@ -118,10 +132,8 @@ def transaction_dedup_key(raw: dict[str, object]) -> str:
     The hash deliberately excludes ``status``: a pending entry that later
     books must map to the same key, or it would be counted twice.
     """
-    for field_name in ("entry_reference", "transaction_id"):
-        value = raw.get(field_name)
-        if isinstance(value, str) and value:
-            return value
+    if (bank_id := transaction_id(raw)) is not None:
+        return bank_id
 
     amount_obj = raw.get("transaction_amount")
     amount = amount_obj.get("amount") if isinstance(amount_obj, dict) else None

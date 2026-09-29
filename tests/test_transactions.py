@@ -128,6 +128,33 @@ class TestDedupKey:
 
         assert transaction_dedup_key(entry) == "tx-9"
 
+    def test_placeholder_reference_is_not_an_id(self) -> None:
+        """Some banks send the Berlin Group placeholder instead of omitting it.
+
+        Taken as an id, every such entry would share one key, so only the
+        first would ever fire an event.
+        """
+        one = transaction_dedup_key(
+            raw(
+                entry_reference="NOTPROVIDED",
+                transaction_amount={"currency": "EUR", "amount": "1.00"},
+            )
+        )
+        two = transaction_dedup_key(
+            raw(
+                entry_reference="NOTPROVIDED",
+                transaction_amount={"currency": "EUR", "amount": "2.00"},
+            )
+        )
+
+        assert one.startswith("sha256:")
+        assert one != two
+
+    def test_placeholder_falls_through_to_transaction_id(self) -> None:
+        entry = raw(entry_reference="NOTPROVIDED", transaction_id="tx-9")
+
+        assert transaction_dedup_key(entry) == "tx-9"
+
     def test_hashes_when_the_bank_sends_neither(self) -> None:
         """Otherwise such an account refires every event on every poll."""
         entry = raw(entry_reference=None)

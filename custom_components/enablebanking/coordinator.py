@@ -55,8 +55,6 @@ from .const import (
     DEFAULT_FETCH_TRANSACTIONS,
     DEFAULT_TRANSACTION_HISTORY_DAYS,
     DOMAIN,
-    MAX_REMEMBERED_TRANSACTIONS,
-    MAX_STORED_TRANSACTIONS,
     POLL_HOURS,
     STATISTIC_SPENDING,
     STORAGE_VERSION,
@@ -533,11 +531,19 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                     stable_id[:8],
                 )
                 fresh = []
-            if len(seen) > MAX_REMEMBERED_TRANSACTIONS:
-                # Bounded, oldest-arbitrary eviction. The window is what
-                # actually protects against refiring; this only stops the
-                # cache growing without limit on a very busy account.
-                self._seen_transactions[stable_id] = set(list(seen)[-MAX_REMEMBERED_TRANSACTIONS:])
+            # The window bounds the seen-set, not a count. A key can only come
+            # back while its entry is still inside the window, so keys that
+            # fell out of it are safe to forget. Keys from the previous stored
+            # window that are still in range are kept too, so a fetch that
+            # happens to come back short does not forget an entry and refire
+            # it when it reappears.
+            window_from = window_start.isoformat()
+            still_in_window = {tx.key for tx in parsed if tx.booked} | {
+                tx.key
+                for tx in self._transactions.get(stable_id, [])
+                if (tx.booking_date or tx.value_date or "") >= window_from
+            }
+            self._seen_transactions[stable_id] = seen & still_in_window
             if fresh:
                 new_by_account[stable_id] = fresh
 
@@ -556,7 +562,7 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
                 (tx for tx in parsed if tx.booked),
                 key=lambda tx: (tx.booking_date or tx.value_date or "", tx.key),
                 reverse=True,
-            )[:MAX_STORED_TRANSACTIONS]
+            )
             try:
                 async_import_statistics(self.hass, account, merged, window_start)
             except Exception:
