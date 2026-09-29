@@ -81,6 +81,11 @@
     }
   },
   "entity": {
+    "button": {
+      "refresh": {
+        "name": "Refresh now"
+      }
+    },
     "event": {
       "transaction": {
         "name": "Transaction",

@@ -149,6 +149,21 @@ class EnableBankingCoordinator(DataUpdateCoordinator[EnableBankingData]):
     def minute_offset(self) -> int:
         return self._minute_offset
 
+    async def async_refresh_as_user(self, psu_headers: dict[str, str]) -> None:
+        """Poll now on behalf of a user who is present.
+
+        With PSU headers the bank treats the fetch as user-initiated, so it
+        does not count against the 4/day background limit. Without them it is
+        an ordinary background poll.
+        """
+        # ponytail: a scheduled poll that overlaps this one would also carry
+        # the headers; add a lock if that ever matters.
+        self.client.psu_headers = psu_headers
+        try:
+            await self.async_refresh()
+        finally:
+            self.client.psu_headers = {}
+
     # ------------------------------------------------------------------ #
     # Scheduling                                                           #
     # ------------------------------------------------------------------ #

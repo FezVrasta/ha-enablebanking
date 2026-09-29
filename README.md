@@ -40,6 +40,7 @@ The integration uses **Enable Banking** as the licensed TPP (Third Party Provide
 - EUR (and other currencies) with `state_class: total`, `device_class: monetary`
 - Attributes per sensor: IBAN, account name, product, currency, balance type, reference date, bank name, `last_polled_at`, `last_error`, `stale`, `consent_expires_at`, `consent_days_remaining`
 - Scheduled polling at fixed local times (10:00, 14:00, 18:00, 22:00) with per-entry minute jitter, so exactly four polls/day, aligned with PSD2's cap
+- **Refresh now** button per bank: a press from the UI polls immediately as a user-initiated fetch, which PSD2 exempts from the 4/day background limit
 - **Never-unavailable sensors**: balances are cached to disk and displayed even during rate-limits, network blips, consent expiry, or the first moment after an HA restart before the first poll runs
 - Graceful 180-day consent expiry: proactive 14-day warning, automatic reauth UI when the consent lapses
 - **Self-renewing API token**: the integration stores your application private key and signs a fresh 23-hour JWT itself, so there is no token to paste and nothing that silently expires
@@ -229,6 +230,30 @@ action: enablebanking.refresh
 ```
 
 It is meant for debugging a freshly added bank. Each call spends real PSD2 quota, so use it sparingly.
+
+### Refresh button
+
+Each bank connection also has a **Refresh now** button (`button.<bank>_refresh_now`). Unlike the service, a press by a logged-in user from the frontend is sent to the bank as a user-initiated fetch: the request carries the `Psu-Ip-Address` and `Psu-User-Agent` headers of the browser or app you pressed it from. PSD2 lets banks limit only *background* access to four fetches a day, so these presses don't use up that quota.
+
+The headers are sent only when all of the following hold:
+
+- the press comes from a logged-in user (a press from an automation has no user and is an ordinary poll);
+- Home Assistant sees a public IP address for that request. A direct LAN connection (`192.168.x.x`, `homeassistant.local`) is an ordinary poll too, since a private address means nothing to the bank.
+
+Scheduled polls never send them, as Enable Banking requires.
+
+If you reach Home Assistant through a reverse proxy, make sure it passes the client address through (`use_x_forwarded_for` and `trusted_proxies` under `http:`). Otherwise Home Assistant sees the proxy's address instead of yours: a private one means no headers are sent, a public one is sent in place of yours. Whether a bank actually exempts these fetches from its limit is up to the bank; the `last_error` attribute shows `rate_limited` if it doesn't.
+
+```yaml
+type: tile
+entity: button.asn_bank_refresh_now
+name: Refresh now
+tap_action:
+  action: perform-action
+  perform_action: button.press
+  target:
+    entity_id: button.asn_bank_refresh_now
+```
 
 ## Lovelace example
 

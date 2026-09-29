@@ -81,6 +81,11 @@
     }
   },
   "entity": {
+    "button": {
+      "refresh": {
+        "name": "Nu verversen"
+      }
+    },
     "event": {
       "transaction": {
         "name": "Transactie",

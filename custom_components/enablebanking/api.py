@@ -75,6 +75,7 @@ class EnableBankingClient:
         self._session = session
         self._jwt = jwt
         self._session_id = session_id
+        self.psu_headers: dict[str, str] = {}
 
     @classmethod
     def for_config_flow(cls, session: aiohttp.ClientSession, jwt: str) -> EnableBankingClient:
@@ -87,10 +88,14 @@ class EnableBankingClient:
 
     @property
     def _headers(self) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {self._jwt}",
             "Accept": "application/json",
         }
+        # Set only while a user-initiated refresh runs: PSU headers tell the
+        # bank the user is present, which lifts the 4/day background limit.
+        # Scheduled polls must go without them.
+        return {**headers, **self.psu_headers}
 
     def _jwt_debug_info(self) -> str:
         """Return non-secret JWT header claims for debug logging."""
